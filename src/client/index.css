@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+  html, body, #root { height: 100%; }
+  body {
+    background-color: #0d0f1a;
+    color: #ecf0f4;
+    font-family: 'Hack NF', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #131625; }
+  ::-webkit-scrollbar-thumb { background: #252848; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3e60; }
+}
+
+@layer components {
+  .card {
+    @apply bg-bg-panel border border-bg-border rounded-lg p-4;
+  }
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold;
+  }
+  .badge-buff   { @apply badge bg-blue/20 text-blue; }
+  .badge-heal   { @apply badge bg-green/20 text-green; }
+  .badge-cc     { @apply badge bg-purple/20 text-purple; }
+  .badge-damage { @apply badge bg-pink/20 text-pink; }
+  .badge-cantrip{ @apply badge bg-cyan/20 text-cyan; }
+  .badge-warn   { @apply badge bg-orange/20 text-orange; }
+  .badge-ok     { @apply badge bg-green/20 text-green; }
+  .badge-missing{ @apply badge bg-red/20 text-red; }
+
+  .section-title {
+    @apply text-purple text-xs font-bold uppercase tracking-widest mb-3;
+  }
+  .tip {
+    @apply text-sm text-text-muted border-l-2 border-orange/50 pl-3 py-0.5;
+  }
+}
