@@ -1,9 +1,13 @@
 import { Hono } from "hono";
 import { parseSave, listSaves } from "../services/save-parser.ts";
 import { analyzeParty } from "../services/party-analyzer.ts";
+import { analyzeComposition } from "../services/party-builder.ts";
 import { isIndexed, getStats, searchBlueprintsByName, lookupBlueprintsMany } from "../services/blueprint-db.ts";
 import { createSseResponse } from "../services/file-watcher.ts";
-import { readBbConfig, groupLabel } from "../services/bubble-buffs.ts";
+import { readBbConfig, addBbBuff, groupLabel } from "../services/bubble-buffs.ts";
+import { getBuilds, getBuild, upsertBuild } from "../services/build-store.ts";
+import { adviseBuild } from "../services/build-advisor.ts";
+import type { BuildProfile } from "../models/types.ts";
 
 const app = new Hono();
 
@@ -186,17 +190,24 @@ app.get("/bubbles", async (c) => {
   function cleanName(n: string): string {
     return n.replace(/_Companion$/, "").replace(/_/g, " ");
   }
-  const spellToCaster: Record<string, string> = {};
+  const spellToCaster: Record<string, string> = {};     // blueprintId -> caster display name
+  const spellToCasterId: Record<string, string> = {};   // blueprintId -> caster uniqueId
+  const spellToSpellbookId: Record<string, string> = {}; // blueprintId -> spellbook blueprint
   const idToName: Record<string, string> = {};
   for (const ch of party.characters) {
     idToName[ch.uniqueId] = cleanName(ch.name);
     if (!ch.spellbook) continue;
     for (const lvlSpells of ch.spellbook.knownSpells) {
       for (const s of lvlSpells) {
-        if (!spellToCaster[s.blueprintId]) spellToCaster[s.blueprintId] = cleanName(ch.name);
+        if (!spellToCaster[s.blueprintId]) {
+          spellToCaster[s.blueprintId]     = cleanName(ch.name);
+          spellToCasterId[s.blueprintId]   = ch.uniqueId;
+          spellToSpellbookId[s.blueprintId] = ch.spellbook!.blueprintId;
+        }
       }
     }
   }
+  const allCharacterIds = party.characters.map((ch) => ch.uniqueId);
 
   // Spell effect descriptions for common buffs
   const EFFECTS: Record<string, string> = {
@@ -238,17 +249,20 @@ app.get("/bubbles", async (c) => {
     .map((s) => {
       const grp = bbGroup(s.name);
       return {
-        guid: s.blueprintId,
-        name: s.name,
-        level: s.spellLevel,
-        priority: priority(s.name),
-        isCantrip: s.isCantrip,
-        group: grp,
-        groupLabel: GROUP_LABEL[grp],
-        groupTip: GROUP_TIP[grp],
-        target: bbTarget(s.name),
-        caster: spellToCaster[s.blueprintId] ?? "Unknown",
-        effect: effect(s.name),
+        guid:        s.blueprintId,
+        name:        s.displayName || s.name,
+        level:       s.spellLevel,
+        priority:    priority(s.name),
+        isCantrip:   s.isCantrip,
+        group:       grp,
+        groupLabel:  GROUP_LABEL[grp],
+        groupTip:    GROUP_TIP[grp],
+        target:      bbTarget(s.name),
+        caster:      spellToCaster[s.blueprintId]     ?? "Unknown",
+        casterId:    spellToCasterId[s.blueprintId]   ?? "",
+        spellbookId: spellToSpellbookId[s.blueprintId] ?? "",
+        wantedIds:   allCharacterIds,
+        effect:      effect(s.name),
       };
     });
 
@@ -257,13 +271,13 @@ app.get("/bubbles", async (c) => {
   for (const b of bbConfig.buffs) {
     const n = b.spellName.toLowerCase();
     if (n.includes("guidance") || n.includes("resistance") || n.includes("virtue")) {
-      existingAdvice[b.spellGuid] = "Cantrip — free and unlimited. Good on Important.";
+      existingAdvice[b.spellGuid] = "Cantrip — free and unlimited. Cast on everyone.";
     } else if (n.includes("magelight") || n.includes("light")) {
       const targets = b.wanted.length;
       if (targets <= 1) existingAdvice[b.spellGuid] = "⚠️ Only targeting 1 person — consider targeting all or removing (it\'s just a light source).";
       else existingAdvice[b.spellGuid] = "Utility (light) — free cantrip, OK to keep.";
     } else if (n.includes("bless")) {
-      existingAdvice[b.spellGuid] = "Perfect. Bless on Important, targeting all party members.";
+      existingAdvice[b.spellGuid] = "Perfect. Cast on all frontliners, targeting the whole party.";
     }
   }
 
@@ -287,6 +301,102 @@ app.get("/bubbles", async (c) => {
       missing: missing.length,
     },
   });
+});
+
+// ─── Build planner endpoints ──────────────────────────────────────────────────
+
+/** GET /api/builds — all saved build profiles */
+app.get("/builds", (c) => {
+  return c.json(getBuilds());
+});
+
+/** PUT /api/builds/:characterId — upsert a build profile */
+app.put("/builds/:characterId", async (c) => {
+  let body: Omit<BuildProfile, "updatedAt">;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+  const characterId = c.req.param("characterId");
+  if (!body.role || !body.classPath) {
+    return c.json({ error: "role and classPath are required" }, 400);
+  }
+  const saved = upsertBuild({ ...body, characterId, updatedAt: new Date().toISOString() });
+  return c.json(saved);
+});
+
+/** GET /api/builds/:characterId/advice — compute build advice for a character */
+app.get("/builds/:characterId/advice", async (c) => {
+  const characterId = c.req.param("characterId");
+  const profile = getBuild(characterId);
+  if (!profile) {
+    return c.json({ error: "No build profile found for this character" }, 404);
+  }
+
+  const savePath = c.req.query("save");
+  const partyData = await parseSave(savePath);
+  if (!partyData) {
+    return c.json({ error: "No save found or parse failed" }, 404);
+  }
+
+  const char = partyData.characters.find((ch) => ch.uniqueId === characterId);
+  if (!char) {
+    return c.json({ error: "Character not found in current save" }, 404);
+  }
+
+  const advice = adviseBuild(profile, char);
+  return c.json(advice);
+});
+
+/** GET /api/party-builder — role composition analysis */
+app.get("/party-builder", async (c) => {
+  const savePath = c.req.query("save");
+  const data = await parseSave(savePath);
+  if (!data) return c.json({ error: "No save found or parse failed" }, 404);
+  const profiles = getBuilds();
+  const composition = analyzeComposition(data, profiles);
+  return c.json(composition);
+});
+
+/** POST /api/bubbles/add — write a new buff entry to the BubbleBuffs config */
+app.post("/bubbles/add", async (c) => {
+  let body: { spellGuid: string; inGroup: number; wantedIds: string[]; casterId: string; spellbookId: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  if (!body.spellGuid) return c.json({ error: "spellGuid required" }, 400);
+
+  // Derive gameId from the current save
+  const savePath = c.req.query("save");
+  const saves = listSaves();
+  const target = savePath ?? saves[0]?.path;
+  if (!target) return c.json({ error: "No save found" }, 404);
+
+  const { unzipSync } = await import("fflate");
+  const fs = await import("fs");
+  const zipData = fs.readFileSync(target);
+  const files = unzipSync(zipData);
+  const headerEntry = Object.entries(files).find(([k]) => {
+    const base = k.split(/[\/\\]/).pop() ?? k;
+    return base === "header.json";
+  });
+  if (!headerEntry) return c.json({ error: "Could not read save header" }, 500);
+  const header = JSON.parse(new TextDecoder().decode(headerEntry[1]));
+  const gameId: string = header.GameId ?? "";
+  if (!gameId) return c.json({ error: "GameId not found in save" }, 500);
+
+  const result = addBbBuff(gameId, {
+    spellGuid:   body.spellGuid,
+    inGroup:     body.inGroup ?? 2,
+    wantedIds:   body.wantedIds ?? [],
+    casterId:    body.casterId ?? "",
+    spellbookId: body.spellbookId ?? "",
+  });
+  if (!result.ok) return c.json({ error: result.error }, 500);
+  return c.json({ ok: true });
 });
 
 /** GET /events — SSE stream for save file changes */

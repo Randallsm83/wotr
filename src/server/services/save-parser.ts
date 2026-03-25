@@ -15,7 +15,26 @@ const SAVES_DIR =
     "AppData\\LocalLow\\Owlcat Games\\Pathfinder Wrath Of The Righteous\\Saved Games"
   );
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ─── Mythic path detection ──────────────────────────────────────────────────────────
+
+const MYTHIC_CLASS_MAP: Record<string, string> = {
+  AeonMythicClass:         "Aeon",
+  AngelMythicClass:        "Angel",
+  AzataMythicClass:        "Azata",
+  DemonMythicClass:        "Demon",
+  DevilMythicClass:        "Devil",
+  GoldenDragonClass:       "Gold Dragon",
+  LegendClass:             "Legend",
+  FakeLegendClass:         "Legend",
+  LichMythicClass:         "Lich",
+  SwarmThatWalksClass:     "Swarm-That-Walks",
+  TricksterMythicClass:    "Trickster",
+  MythicStartingClass:     "Mythic Hero",
+  MythicCompanionClass:    "Mythic Companion",
+  MonsterMythicClass:      "Monster",
+};
+
+// ─── Public API ───────────────────────────────────────────────────────────────────────
 
 export function getSavesDir(): string {
   return SAVES_DIR;
@@ -83,8 +102,16 @@ function parseMeta(header: any, modList: any): SaveMeta {
 // ─── Party ────────────────────────────────────────────────────────────────────
 
 async function parseParty(party: any, header: any): Promise<CharacterData[]> {
-  const entities: any[] = party.m_EntityData ?? [];
+  const rawEntities: any[] = party.m_EntityData ?? [];
   const pcName: string = header.PlayerCharacterName ?? "";
+
+  // Build a single $id→object map from the ENTIRE party JSON so that
+  // cross-entity $refs (e.g. companion weapon items defined outside the
+  // companion entity subtree) resolve correctly.
+  const globalIdMap = buildIdMap(party);
+  const entities = rawEntities.map((e) =>
+    e.Descriptor ? resolveRefsWithMap(e, globalIdMap) : e
+  );
 
   // Collect all blueprint GUIDs we'll need
   const allGuids = new Set<string>();
@@ -99,6 +126,12 @@ async function parseParty(party: any, header: any): Promise<CharacterData[]> {
         if (cls.Archetypes?.[0]) allGuids.add(cls.Archetypes[0]);
       }
     }
+    // For archetype resolution for all classes (including multiclass)
+    for (const cls of (prog?.Classes ?? [])) {
+      if (cls.Archetypes) {
+        for (const a of cls.Archetypes) if (a) allGuids.add(a);
+      }
+    }
     for (const sbEntry of (desc.m_Spellbooks ?? [])) {
       const sb = sbEntry.Value;
       if (!sb) continue;
@@ -110,13 +143,16 @@ async function parseParty(party: any, header: any): Promise<CharacterData[]> {
     for (const fact of (entity.Facts?.m_Facts ?? [])) {
       if (fact?.Blueprint && fact?.["$type"]?.includes("Feature")) allGuids.add(fact.Blueprint);
     }
-    // Item blueprints from Body slots
-    collectBodyItemGuids(desc.Body, allGuids);
-    // Feat selection GUIDs
+  // Item blueprints — items live in Facts/inventory, not directly in Body slots
+    collectEntityItemGuids(entity, allGuids);
+    // Feat selection GUIDs — values may be a string or array of strings
     for (const sel of (desc.Progression?.m_Selections ?? [])) {
       const byLevel = sel.Value?.m_SelectionsByLevel ?? {};
-      for (const guid of Object.values(byLevel)) {
-        if (typeof guid === "string" && guid) allGuids.add(guid);
+      for (const guidOrArr of Object.values(byLevel)) {
+        const guids = Array.isArray(guidOrArr) ? guidOrArr : [guidOrArr];
+        for (const guid of guids) {
+          if (typeof guid === "string" && guid) allGuids.add(guid);
+        }
       }
     }
   }
@@ -126,6 +162,47 @@ async function parseParty(party: any, header: any): Promise<CharacterData[]> {
   return entities
     .filter((e) => e.Descriptor)
     .map((entity) => parseEntity(entity, pcName, blueprintMap));
+}
+
+// ─── JSON.NET $ref resolution ────────────────────────────────────────────────
+
+/**
+ * Walk any JSON tree collecting all objects that carry a "$id" property.
+ * Call once on the full party JSON to get a global map, then pass it to
+ * resolveRefsWithMap so cross-entity back-references resolve correctly.
+ */
+function buildIdMap(root: any): Map<string, any> {
+  const map = new Map<string, any>();
+  function collect(obj: any): void {
+    if (!obj || typeof obj !== "object") return;
+    if (Array.isArray(obj)) { obj.forEach(collect); return; }
+    if (obj["$id"]) map.set(obj["$id"], obj);
+    for (const v of Object.values(obj)) collect(v);
+  }
+  collect(root);
+  return map;
+}
+
+/**
+ * Resolve every pure { "$ref": "N" } node in `root` using the provided
+ * id→object map.  Returns a structurally-new tree (shallow-copy of each
+ * non-ref object) with refs replaced by their originals.
+ */
+function resolveRefsWithMap(root: any, idMap: Map<string, any>): any {
+  function resolve(obj: any): any {
+    if (!obj || typeof obj !== "object") return obj;
+    if (Array.isArray(obj)) return obj.map(resolve);
+    const keys = Object.keys(obj);
+    if (keys.length === 1 && keys[0] === "$ref") {
+      return idMap.get(obj["$ref"]) ?? obj;
+    }
+    const out: any = {};
+    for (const [k, v] of Object.entries(obj)) {
+      out[k] = resolve(v);
+    }
+    return out;
+  }
+  return resolve(root);
 }
 
 function collectSpellGuids(sb: any, out: Set<string>) {
@@ -157,27 +234,43 @@ function parseEntity(
   const customName: string = desc.CustomName ?? "";
   const uniqueId: string = entity.UniqueId ?? "";
 
-  // Resolve display name
+  // Resolve display name — strip internal suffixes from companion names
   const blueprintInfo = blueprintMap.get(blueprint);
-  const name = customName || blueprintInfo?.name || blueprint.slice(0, 8);
+  const rawName = customName || blueprintInfo?.name || blueprint.slice(0, 8);
+  const name = cleanCharName(rawName);
   const isPC = !!customName || name === pcName;
 
-  // Class info
+  // Class info — separate mythic path entries from regular classes
   const prog = desc.Progression;
   let classInfo: ClassInfo | undefined;
+  let allClasses: ClassInfo[] = [];
+  let mythicPath: string | undefined;
+  let mythicLevel: number | undefined;
   if (prog?.Classes) {
-    const cls = prog.Classes[0] ?? prog.Classes;
-    if (cls) {
-      const classId = cls.CharacterClass ?? "";
+    for (const cls of (prog.Classes as any[])) {
+      const classId: string = cls.CharacterClass ?? "";
+      if (!classId) continue;
+      const bpName: string = blueprintMap.get(classId)?.name ?? "";
+      // Check for mythic path class
+      const mythicName = MYTHIC_CLASS_MAP[bpName];
+      if (mythicName) {
+        mythicPath = mythicName;
+        mythicLevel = cls.Level ?? 1;
+        continue;
+      }
+      // Regular class — strip internal "Class"/"Archetype" suffixes
       const archetypeId = cls.Archetypes?.[0] ?? "";
-      classInfo = {
+      const rawArchName = archetypeId ? (blueprintMap.get(archetypeId)?.name ?? "") : "";
+      allClasses.push({
         classId,
-        className: blueprintMap.get(classId)?.name ?? classId.slice(0, 8),
+        className: cleanClassName(bpName) || classId.slice(0, 8),
         archetypeId: archetypeId || undefined,
-        archetypeName: archetypeId ? (blueprintMap.get(archetypeId)?.name ?? archetypeId.slice(0, 8)) : undefined,
+        archetypeName: archetypeId ? (cleanClassName(rawArchName) || archetypeId.slice(0, 8)) : undefined,
         level: cls.Level ?? 1,
-      };
+      });
     }
+    // Primary class = highest level among regular classes
+    classInfo = allClasses.sort((a, b) => b.level - a.level)[0];
   }
 
   // Identity
@@ -209,10 +302,13 @@ function parseEntity(
     spellbook = parseSpellbook(sbEntries[0].Value, blueprintMap);
   }
 
-  // Equipment from Body slots
-  const equipment = parseEquipment(desc.Body, entity.Facts, blueprintMap);
+  // Equipment from Body slots — resolve item refs from entity-wide item map
+  const itemRefMap = buildItemRefMap(entity);
+  const equipment = parseEquipment(desc.Body, blueprintMap, itemRefMap);
 
-  return { uniqueId, name, blueprint, isPlayerCharacter: isPC, gender, race, alignment, background, deity, class: classInfo, stats, feats, traits, equipment, spellbook };
+  return { uniqueId, name, blueprint, isPlayerCharacter: isPC, gender, race, alignment, background, deity,
+    class: classInfo, allClasses, mythicPath, mythicLevel,
+    stats, feats, traits, equipment, spellbook };
 }
 
 // ─── Spellbook ────────────────────────────────────────────────────────────────
@@ -249,7 +345,7 @@ function parseSpellbook(sb: any, blueprintMap: Map<string, any>): SpellbookData 
           const bp = blueprintMap.get(bpId);
           return {
             spellBlueprintId: bpId,
-            spellName: bp?.name ?? bpId.slice(0, 8),
+            spellName: bp?.displayName || humanize(bp?.name ?? "") || "Unknown Spell",
             available: slot.Available === true,
           };
         });
@@ -287,57 +383,93 @@ const BODY_SLOTS: Record<string, string> = {
   Wrist: "Wrist", Shoulders: "Shoulders", Shirt: "Shirt", Glasses: "Glasses",
 };
 
-function getItemBlueprint(slot: any): string | null {
-  if (!slot || slot["$ref"]) return null; // $ref = slot is populated but we need to resolve
-  return slot.m_Blueprint ?? null;
-}
-
-// Collect blueprints from Body for prefetch — walk the Body object for m_Blueprint fields
-function collectBodyItemGuids(body: any, out: Set<string>) {
-  if (!body || typeof body !== "object") return;
-  // Recurse into all values
-  function walk(obj: any) {
+/**
+ * Walk the entire entity tree collecting all item objects.
+ * Items are stored in Facts/inventory, not directly in Body slots.
+ * Builds two maps:
+ *   uniqueIdToBlueprint:  item UniqueId  → m_Blueprint GUID
+ *   uniqueIdToMeta:       item UniqueId  → { identified, type }
+ */
+function buildItemRefMap(entity: any): Map<string, { blueprint: string; identified: boolean; type: string }> {
+  const map = new Map<string, { blueprint: string; identified: boolean; type: string }>();
+  function walk(obj: any): void {
     if (!obj || typeof obj !== "object") return;
     if (Array.isArray(obj)) { obj.forEach(walk); return; }
-    if (obj["$ref"]) return; // don't recurse into refs
-    if (obj.m_Blueprint) out.add(obj.m_Blueprint);
+    // An item entity has UniqueId + m_Blueprint
+    if (obj.UniqueId && obj.m_Blueprint) {
+      const rawType: string = obj["$type"] ?? "";
+      let itemType = "Equipment";
+      if (rawType.includes("Weapon")) itemType = "Weapon";
+      else if (rawType.includes("Shield")) itemType = "Shield";
+      else if (rawType.includes("Armor")) itemType = "Armor";
+      map.set(obj.UniqueId, {
+        blueprint: obj.m_Blueprint,
+        identified: obj.IsIdentified !== false,
+        type: itemType,
+      });
+    }
     for (const v of Object.values(obj)) walk(v);
   }
-  walk(body);
+  walk(entity);
+  return map;
 }
 
-function resolveSlotItem(slot: any): { blueprint: string; identified: boolean; type: string } | null {
+/** Collect all item blueprint GUIDs from an entire entity for DB prefetch */
+function collectEntityItemGuids(entity: any, out: Set<string>): void {
+  function walk(obj: any): void {
+    if (!obj || typeof obj !== "object") return;
+    if (Array.isArray(obj)) { obj.forEach(walk); return; }
+    if (obj.UniqueId && obj.m_Blueprint) out.add(obj.m_Blueprint);
+    for (const v of Object.values(obj)) walk(v);
+  }
+  walk(entity);
+}
+
+/**
+ * Resolve a Body slot object to its item info.
+ * Slots are HandSlot/ItemSlot objects with m_ItemRef (a UniqueId string).
+ * Falls back to checking m_Blueprint directly on the slot for simple cases.
+ */
+function resolveSlot(
+  slot: any,
+  itemRefMap: Map<string, { blueprint: string; identified: boolean; type: string }>
+): { blueprint: string; identified: boolean; type: string } | null {
   if (!slot || typeof slot !== "object") return null;
-  // $ref means the slot points to an item defined elsewhere — we can't resolve it easily
-  // but the item should also have appeared as a direct child in the Body tree already
-  if (slot["$ref"]) return null; // will be handled via Facts/m_HandsEquipmentSets
-  if (!slot.m_Blueprint) return null;
-  const rawType: string = slot["$type"] ?? "";
-  let itemType = "Equipment";
-  if (rawType.includes("Weapon")) itemType = "Weapon";
-  else if (rawType.includes("Shield")) itemType = "Shield";
-  else if (rawType.includes("Armor")) itemType = "Armor";
-  return { blueprint: slot.m_Blueprint, identified: slot.IsIdentified !== false, type: itemType };
+  // Slot object may carry m_ItemRef (a UniqueId pointing to the actual item)
+  if (slot.m_ItemRef) {
+    const entry = itemRefMap.get(slot.m_ItemRef);
+    if (entry) return entry;
+  }
+  // Fallback: direct m_Blueprint on the slot (some simple slots work this way)
+  if (slot.m_Blueprint) {
+    const rawType: string = slot["$type"] ?? "";
+    let itemType = "Equipment";
+    if (rawType.includes("Weapon")) itemType = "Weapon";
+    else if (rawType.includes("Shield")) itemType = "Shield";
+    else if (rawType.includes("Armor")) itemType = "Armor";
+    return { blueprint: slot.m_Blueprint, identified: slot.IsIdentified !== false, type: itemType };
+  }
+  return null;
 }
 
 function parseEquipment(
   body: any,
-  facts: any, // not used currently, reserved
-  blueprintMap: Map<string, any>
+  blueprintMap: Map<string, any>,
+  itemRefMap: Map<string, { blueprint: string; identified: boolean; type: string }>
 ): EquipmentItem[] {
   if (!body) return [];
   const items: EquipmentItem[] = [];
 
-  function addItem(slot: string, obj: any) {
-    const resolved = resolveSlotItem(obj);
+  function addItem(slotName: string, slotObj: any) {
+    const resolved = resolveSlot(slotObj, itemRefMap);
     if (!resolved) return;
     const bp = blueprintMap.get(resolved.blueprint);
     const name = bp?.name ?? resolved.blueprint.slice(0, 8);
-    if (name === resolved.blueprint.slice(0, 8) && !bp) return; // skip unresolved
+    if (!bp) return; // skip if blueprint not in DB
     items.push({
-      slot,
+      slot: slotName,
       blueprintId: resolved.blueprint,
-      name: humanize(name),
+      name: humanizeItem(name),
       itemType: resolved.type,
       isIdentified: resolved.identified,
     });
@@ -348,7 +480,7 @@ function parseEquipment(
     addItem(label, body[key]);
   }
 
-  // Weapon sets
+  // Weapon sets — use active hand set
   const setIdx: number = body.m_CurrentHandsEquipmentSetIndex ?? 0;
   const sets: any[] = body.m_HandsEquipmentSets ?? [];
   const activeSet = sets[setIdx];
@@ -458,8 +590,30 @@ const TRAIT_NOISE = [
 function humanize(name: string): string {
   return name
     .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/Feature$/, "").replace(/Progression$/, "")
+    .replace(/Feature$/, "").replace(/Progression$/, "").replace(/Cast$/, "")
     .replace(/_/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Strip save-file internal suffixes from character/class/archetype names. */
+function cleanCharName(name: string): string {
+  return name.replace(/_Companion$/i, "").trim();
+}
+
+function cleanClassName(name: string): string {
+  return name.replace(/Class$/, "").replace(/Archetype$/, "").trim();
+}
+
+/**
+ * Equipment-specific display cleaner:
+ *   "HeadbandOfCharisma2"      → "Headband of Charisma +2"
+ *   "CryptRaidersArmorItem"    → "Crypt Raiders Armor"
+ *   "FinneanScimitarStage1"    → "Finnean Scimitar +1"
+ */
+function humanizeItem(name: string): string {
+  return humanize(name)
+    .replace(/\s+Item$/i, "")                             // strip trailing "Item"
+    .replace(/\s+Stage\s*(\d+)$/i, " +$1")               // "Stage1" → "+1"
+    .replace(/\s+(\d+)$/, " +$1");                        // trailing digit → "+N"
 }
 
 function parseTraits(
@@ -483,6 +637,8 @@ function parseTraits(
     // Skip noise
     if (TRAIT_NOISE.some((n) => name.includes(n))) continue;
     if (bp.type !== "BlueprintFeature") continue;
+    // Skip archetype permission flags — internal markers like "Fire Domain Allowed Separatist"
+    if (/Allowed\s+\w+$/.test(name)) continue;
 
     // Categorize by name patterns
     let category: TraitEntry["category"] = "class";
@@ -536,9 +692,13 @@ function parseFeatsAndIdentity(
   const featGuids = new Map<string, number>();
   for (const sel of selections) {
     const byLevel = sel.Value?.m_SelectionsByLevel ?? {};
-    for (const [lvl, guid] of Object.entries(byLevel)) {
-      if (typeof guid === "string" && guid && !featGuids.has(guid)) {
-        featGuids.set(guid, parseInt(lvl));
+    for (const [lvl, guidOrArr] of Object.entries(byLevel)) {
+      // m_SelectionsByLevel values may be a string or an array of strings
+      const guids = Array.isArray(guidOrArr) ? guidOrArr : [guidOrArr];
+      for (const guid of guids) {
+        if (typeof guid === "string" && guid && !featGuids.has(guid)) {
+          featGuids.set(guid, parseInt(lvl));
+        }
       }
     }
   }
@@ -567,7 +727,7 @@ function parseFeatsAndIdentity(
     // Skip non-feature types
     if (bp.type && !bp.type.includes("Feature") && !bp.type.includes("Ability")) continue;
 
-    feats.push({ guid, name, level });
+    feats.push({ guid, name: humanize(name), level });
   }
 
   return {
@@ -585,10 +745,11 @@ function resolveSpellEntry(
   blueprintMap: Map<string, any>
 ): SpellEntry {
   const bp = blueprintMap.get(bpId);
+  const displayName = bp?.displayName || humanize(bp?.name ?? "") || "Unknown Spell";
   return {
     blueprintId: bpId,
-    name: bp?.name ?? bpId.slice(0, 8),
-    displayName: bp?.displayName ?? "",
+    name: bp?.name ?? "unknown",
+    displayName,
     spellLevel: bp?.spellLevel ?? lvlIdx,
     isSpell: bp?.isSpell ?? true,
     isBuff: bp?.isBuff ?? false,
