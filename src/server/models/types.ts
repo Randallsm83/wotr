@@ -45,7 +45,10 @@ export interface CharacterData {
   alignment?: string;
   background?: string;
   deity?: string;
-  class?: ClassInfo;
+  class?: ClassInfo;         // primary (highest-level non-mythic) class
+  allClasses?: ClassInfo[];  // all non-mythic classes (multiclass support)
+  mythicPath?: string;       // detected mythic path name e.g. "Aeon", "Angel"
+  mythicLevel?: number;      // current mythic tier
   stats?: CharacterStats;
   feats?: FeatEntry[];
   traits?: TraitEntry[];
@@ -164,6 +167,90 @@ export interface PartyInsights {
   hasSummon: boolean;
   missingCoverage: string[];
   tips: string[];
+}
+
+// ─── Build Planner ───────────────────────────────────────────────────────────
+
+export type BuildRole =
+  | "tank"
+  | "melee-dps"
+  | "ranged-dps"
+  | "arcane-caster"
+  | "divine-caster"
+  | "healer"
+  | "buffer"
+  | "controller"
+  | "summoner"
+  | "support";
+
+export const BUILD_ROLE_LABELS: Record<BuildRole, string> = {
+  "tank":          "Tank / Defender",
+  "melee-dps":     "Melee DPS",
+  "ranged-dps":    "Ranged DPS",
+  "arcane-caster": "Arcane Caster",
+  "divine-caster": "Divine Caster",
+  "healer":        "Healer",
+  "buffer":        "Buffer / Support",
+  "controller":    "Controller (CC)",
+  "summoner":      "Summoner",
+  "support":       "Off-Support / Utility",
+};
+
+export interface BuildProfile {
+  characterId: string;
+  characterName: string;
+  role: BuildRole;
+  classPath: string;      // e.g. "Paladin → Divine Commander archetype"
+  mythicPath?: string;    // e.g. "Aeon" or "Legend"
+  notes?: string;         // free-text goals, e.g. "focusing mounted combat feats"
+  updatedAt: string;      // ISO timestamp
+}
+
+export interface FeatGap {
+  featName: string;       // human-readable name
+  reason: string;         // why it matters for this role
+  byLevel?: number;       // ideal level to take it (if known)
+}
+
+export interface BuildAdvice {
+  profile: BuildProfile;
+  alignmentScore: number;         // 0-100
+  statWarnings: string[];
+  featGaps: FeatGap[];
+  spellPriorities: string[];      // spell names to prepare / prioritize
+  equipmentNotes: string[];
+  nextLevelTips: string[];        // actionable tips for the next level-up
+}
+
+// ─── Party Builder ───────────────────────────────────────────────────────────
+
+export interface RoleScores {
+  frontline: number;  // 0-5: tanking / melee presence
+  damage:    number;  // 0-5: offensive output
+  healer:    number;  // 0-5: healing throughput
+  buffer:    number;  // 0-5: party-wide buffs
+  control:   number;  // 0-5: crowd control
+  utility:   number;  // 0-5: skills, summons, niche
+}
+
+export interface CharacterRoleProfile {
+  characterId:   string;
+  characterName: string;
+  className:     string;
+  level:         number;
+  scores:        RoleScores;
+  primaryRole:   string;
+  secondaryRole: string;
+  notes:         string[];   // brief per-character observations
+}
+
+export interface PartyComposition {
+  characters:  CharacterRoleProfile[];
+  partyScores: RoleScores;            // max per role across party
+  gaps:        string[];              // roles with party score < threshold
+  strengths:   string[];             // roles where party excels
+  synergies:   string[];             // cross-character synergy notes
+  advice:      string[];             // actionable top-level tips
 }
 
 // ─── AI ───────────────────────────────────────────────────────────────────────

@@ -124,6 +124,82 @@ export function analyzeBbCoverage(
   return { configured, notConfigured, blacklisted };
 }
 
+// ─── Writer ──────────────────────────────────────────────────────────────────
+
+/** Convert a 32-char hex GUID (no dashes) to UUID format with dashes */
+function formatGuid(hex: string): string {
+  const h = hex.replace(/-/g, "").toLowerCase();
+  if (h.length !== 32) return hex; // already formatted or invalid
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+}
+
+export interface AddBbBuffEntry {
+  spellGuid:   string;  // 32-char hex (no dashes) blueprint ID
+  inGroup:     number;  // 1=Short, 2=Important, 3=Normal
+  wantedIds:   string[]; // character UniqueIds to buff
+  casterId:    string;  // casting character UniqueId (Name field in BubbleBuffs)
+  spellbookId: string;  // spellbook blueprint GUID (with or without dashes)
+}
+
+/**
+ * Append a new buff entry to the BubbleBuffs per-game config.
+ * The game must NOT be running when this is called; BubbleBuffs will re-read
+ * the file the next time it performs a buff pass.
+ */
+export function addBbBuff(
+  gameId: string,
+  entry: AddBbBuffEntry
+): { ok: true } | { ok: false; error: string } {
+  const filePath = `${BB_SETTINGS_DIR}\\bubblebuff-${gameId}.json`;
+  if (!fs.existsSync(filePath)) {
+    return { ok: false, error: `BubbleBuffs config not found: ${filePath}` };
+  }
+
+  let raw: any;
+  try {
+    raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch (e: any) {
+    return { ok: false, error: `Failed to parse config: ${e.message}` };
+  }
+
+  const buffs: any[] = raw.Buffs ?? [];
+  const normalizedGuid = normalizeGuid(entry.spellGuid);
+
+  // De-duplicate — don’t add if already present
+  const alreadyExists = buffs.some(
+    (b: any) => normalizeGuid(b?.Key?.Guid ?? "") === normalizedGuid
+  );
+  if (alreadyExists) return { ok: true }; // idempotent
+
+  const casterEntry = entry.casterId ? [{
+    Key: { Name: entry.casterId, Spellbook: formatGuid(entry.spellbookId) },
+    Value: { Banned: false, Cap: -1, ShareTransmutation: false, PowerfulChange: false, ReservoirCLBuff: false, UseAzataZippyMagic: false },
+  }] : [];
+
+  buffs.push({
+    Key:   { Guid: formatGuid(normalizedGuid), MetamagicMask: 0, Archmage: false },
+    Value: {
+      InGroup:               entry.inGroup,
+      Blacklisted:           false,
+      IgnoreForOverwriteCheck: null,
+      Wanted:                entry.wantedIds,
+      CasterPriority:        null,
+      Casters:               casterEntry,
+      BaseSpell:             "00000000-0000-0000-0000-000000000000",
+    },
+  });
+
+  raw.Buffs = buffs;
+
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(raw, null, 2), "utf8");
+  } catch (e: any) {
+    return { ok: false, error: `Failed to write config: ${e.message}` };
+  }
+
+  return { ok: true };
+}
+
 /** Group name for display */
 export function groupLabel(inGroup: number): string {
   switch (inGroup) {

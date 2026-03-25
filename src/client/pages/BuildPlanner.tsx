@@ -1,0 +1,524 @@
+import { useState, useEffect, useCallback } from "react";
+import { useLiveSave } from "../hooks/useLiveSave.ts";
+import type { BuildProfile, BuildAdvice, BuildRole, CharacterRoleProfile, CharacterData } from "../../../src/server/models/types.ts";
+import { BUILD_ROLE_LABELS } from "../../../src/server/models/types.ts";
+import AiStream from "../components/AiStream.tsx";
+
+// ─── Score bar ────────────────────────────────────────────────────────────────
+
+function ScoreBar({ score }: { score: number }) {
+  const color =
+    score >= 75 ? "bg-green" :
+    score >= 50 ? "bg-cyan" :
+    score >= 25 ? "bg-orange" :
+    "bg-red";
+
+  const label =
+    score >= 75 ? "text-green" :
+    score >= 50 ? "text-cyan" :
+    score >= 25 ? "text-orange" :
+    "text-red";
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-text-dim uppercase tracking-wider">Build Fit</span>
+        <span className={`font-bold text-sm ${label}`}>{score}/100</span>
+      </div>
+      <div className="h-2 bg-bg-elevated rounded overflow-hidden">
+        <div
+          className={`h-full rounded transition-all duration-500 ${color}`}
+          style={{ width: `${score}%` }}
+        />
+      </div>
+      <div className="text-xs text-text-dim">
+        {score >= 75 ? "On track — keep it up" :
+         score >= 50 ? "Making progress — some gaps remain" :
+         score >= 25 ? "Needs attention — check the advice below" :
+         "Significant gaps — review the build plan"}
+      </div>
+    </div>
+  );
+}
+
+// ─── Advice panel ─────────────────────────────────────────────────────────────
+
+function AdvicePanel({ advice }: { advice: BuildAdvice }) {
+  return (
+    <div className="space-y-4">
+      <ScoreBar score={advice.alignmentScore} />
+
+      {advice.statWarnings.length > 0 && (
+        <div className="card space-y-2">
+          <div className="section-title text-orange">Stat Warnings</div>
+          {advice.statWarnings.map((w, i) => (
+            <div key={i} className="flex gap-2 text-sm">
+              <span className="text-orange shrink-0">▲</span>
+              <span className="text-text-muted">{w}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {advice.featGaps.length > 0 && (
+        <div className="card space-y-2">
+          <div className="section-title text-red">Feat Gaps</div>
+          {advice.featGaps.map((f, i) => (
+            <div key={i} className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <span className="badge badge-missing">{f.featName}</span>
+                {f.byLevel && (
+                  <span className="text-xs text-text-dim">ideal by Lv{f.byLevel}</span>
+                )}
+              </div>
+              <div className="text-xs text-text-dim pl-1">{f.reason}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {advice.spellPriorities.length > 0 && (
+        <div className="card space-y-2">
+          <div className="section-title text-blue">Spell Priorities</div>
+          {advice.spellPriorities.map((s, i) => (
+            <div key={i} className="flex gap-2 text-sm">
+              <span className="text-blue shrink-0">✦</span>
+              <span className="text-text-muted">{s}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {advice.equipmentNotes.length > 0 && (
+        <div className="card space-y-2">
+          <div className="section-title text-yellow">Equipment</div>
+          {advice.equipmentNotes.map((n, i) => (
+            <div key={i} className="flex gap-2 text-sm">
+              <span className="text-yellow shrink-0">◆</span>
+              <span className="text-text-muted">{n}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {advice.nextLevelTips.length > 0 && (
+        <div className="card space-y-2">
+          <div className="section-title text-purple">Next Level-Up</div>
+          {advice.nextLevelTips.map((t, i) => (
+            <div key={i} className="tip">{t}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Build editor ─────────────────────────────────────────────────────────────
+
+// Map party-builder primaryRole label → BuildRole
+const LABEL_TO_ROLE: Record<string, BuildRole> = {
+  Frontline: "tank", Damage: "melee-dps", Healer: "healer",
+  Buffer: "buffer",  Control: "controller", Utility: "support",
+};
+
+interface EditorProps {
+  characterId: string;
+  characterName: string;
+  char: CharacterData | undefined;       // live character from save
+  initial: BuildProfile | null;
+  detected: CharacterRoleProfile | null; // from party-builder
+  onSaved: (profile: BuildProfile) => void;
+}
+
+/** Strip trailing "Class" from blueprint names: "RangerClass" → "Ranger" */
+function stripClass(n: string): string { return n.replace(/Class$/, ""); }
+
+/** Build a human-readable class path from CharacterData */
+function detectClassPath(char: CharacterData | undefined): string {
+  if (!char?.class) return "";
+  const classes = char.allClasses ?? [char.class];
+  const parts = classes
+    .sort((a, b) => b.level - a.level)
+    .map((c) => {
+      const name = stripClass(c.className);
+      const arch = c.archetypeName ? ` (→ ${stripClass(c.archetypeName)})` : "";
+      const lvl  = classes.length > 1 ? ` ${c.level}` : "";
+      return `${name}${arch}${lvl}`;
+    });
+  return parts.join(" / ");
+}
+
+function BuildEditor({ characterId, characterName, char, initial, detected, onSaved }: EditorProps) {
+  const detectedRole: BuildRole = LABEL_TO_ROLE[detected?.primaryRole ?? ""] ?? "support";
+  const autoClassPath   = detectClassPath(char);
+  const autoMythicPath  = char?.mythicPath ?? "";
+
+  const [role, setRole]           = useState<BuildRole>(initial?.role ?? detectedRole);
+  const [classPath, setClassPath] = useState(initial?.classPath || autoClassPath);
+  const [mythicPath, setMythicPath] = useState(initial?.mythicPath || autoMythicPath);
+  const [notes, setNotes]         = useState(initial?.notes ?? "");
+  const [saving, setSaving]       = useState(false);
+  const [saveMsg, setSaveMsg]     = useState<string | null>(null);
+  const isAutoRole    = !initial && detected;
+  const isAutoClass   = !initial?.classPath   && !!autoClassPath;
+  const isAutoMythic  = !initial?.mythicPath  && !!autoMythicPath;
+
+  // Reset when character changes
+  useEffect(() => {
+    setRole(initial?.role ?? detectedRole);
+    setClassPath(initial?.classPath || autoClassPath);
+    setMythicPath(initial?.mythicPath || autoMythicPath);
+    setNotes(initial?.notes ?? "");
+    setSaveMsg(null);
+  }, [characterId, initial]);
+
+  async function save() {
+    if (!classPath.trim() && !autoClassPath) {
+      setSaveMsg("Class path is required.");
+      return;
+    }
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const res = await fetch(`/api/builds/${characterId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ characterId, characterName, role, classPath, mythicPath, notes }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const saved: BuildProfile = await res.json();
+      setSaveMsg("Saved.");
+      onSaved(saved);
+    } catch (e: any) {
+      setSaveMsg(`Error: ${e.message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full bg-bg-elevated border border-bg-border2 rounded px-3 py-2 text-sm text-text-base placeholder:text-text-dim focus:outline-none focus:border-purple/50";
+
+  return (
+    <div className="card space-y-4">
+      <div className="section-title">Build Profile</div>
+
+      {/* Role */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-text-dim">Role</label>
+          </div>
+          {detected && role !== detectedRole && (
+            <button
+              onClick={() => setRole(detectedRole)}
+              className="text-[10px] text-cyan hover:text-cyan/80 transition-colors"
+              title={`Reset to auto-detected: ${detected.primaryRole}`}
+            >
+              ↺ reset to {detected.primaryRole.toLowerCase()}
+            </button>
+          )}
+        </div>
+        <select
+          value={role}
+          onChange={(e) => setRole(e.target.value as BuildRole)}
+          className={`${inputClass} cursor-pointer`}
+        >
+          {(Object.entries(BUILD_ROLE_LABELS) as [BuildRole, string][]).map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
+        </select>
+        {detected && (
+          <div className="text-[10px] text-text-dim mt-1">
+            Detected: {detected.primaryRole} / {detected.secondaryRole}
+            {detected.scores && ` — ${Object.entries(detected.scores).map(([k, v]) => `${k.charAt(0).toUpperCase() + k.slice(1)} ${v}`).join("  ")}`}
+          </div>
+        )}
+      </div>
+
+      {/* Class path */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-xs text-text-dim">Class / Archetype Path</label>
+          {autoClassPath && classPath !== autoClassPath && (
+            <button
+              onClick={() => setClassPath(autoClassPath)}
+              className="text-[10px] text-cyan hover:text-cyan/80 transition-colors"
+              title={`Reset to: ${autoClassPath}`}
+            >
+              ↺ reset to detected
+            </button>
+          )}
+        </div>
+        <input
+          value={classPath}
+          onChange={(e) => setClassPath(e.target.value)}
+          placeholder={autoClassPath || "e.g. Paladin → Divine Commander archetype"}
+          className={inputClass}
+        />
+        {autoClassPath && (
+          <div className="text-[10px] text-text-dim mt-1">
+            Detected: {autoClassPath} — edit to add prestige dips or notes
+          </div>
+        )}
+      </div>
+
+      {/* Mythic path */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-xs text-text-dim">Mythic Path</label>
+          {autoMythicPath && mythicPath !== autoMythicPath && (
+            <button
+              onClick={() => setMythicPath(autoMythicPath)}
+              className="text-[10px] text-cyan hover:text-cyan/80 transition-colors"
+              title={`Reset to: ${autoMythicPath}`}
+            >
+              ↺ reset to detected
+            </button>
+          )}
+        </div>
+        <input
+          value={mythicPath}
+          onChange={(e) => setMythicPath(e.target.value)}
+          placeholder={autoMythicPath || "e.g. Aeon, Angel, Legend, Azata..."}
+          className={inputClass}
+        />
+        {autoMythicPath && (
+          <div className="text-[10px] text-text-dim mt-1">
+            Detected: {autoMythicPath}{char?.mythicLevel ? ` (Tier ${char.mythicLevel})` : ""}
+          </div>
+        )}
+      </div>
+
+      {/* Notes */}
+      <div>
+        <label className="block text-xs text-text-dim mb-1">Build Goals / Notes</label>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="e.g. Focused on mounted combat feats. Wants to use Cornugon Smash intimidate chain. Dipping 2 levels of Fighter for bonus feats."
+          rows={4}
+          className={`${inputClass} resize-none`}
+        />
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={save}
+          disabled={saving}
+          className="px-4 py-2 rounded bg-purple/20 border border-purple/30 text-purple text-sm hover:bg-purple/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {saving ? "Saving..." : "Save Build"}
+        </button>
+        {saveMsg && (
+          <span className={`text-xs ${saveMsg.startsWith("Error") ? "text-red" : "text-green"}`}>
+            {saveMsg}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+export default function BuildPlanner() {
+  const { party, loading } = useLiveSave();
+  const [selected, setSelected] = useState(0);
+  const [profiles, setProfiles] = useState<Record<string, BuildProfile>>({});
+  const [detected, setDetected] = useState<Record<string, CharacterRoleProfile>>({});
+  const [advice, setAdvice] = useState<BuildAdvice | null>(null);
+  const [adviceLoading, setAdviceLoading] = useState(false);
+
+  // Load saved profiles once on mount
+  useEffect(() => {
+    fetch("/api/builds")
+      .then((r) => r.json())
+      .then((list: BuildProfile[]) => {
+        const map: Record<string, BuildProfile> = {};
+        for (const p of list) map[p.characterId] = p;
+        setProfiles(map);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Load party-builder role detection
+  useEffect(() => {
+    fetch("/api/party-builder")
+      .then((r) => r.json())
+      .then((d: { characters: CharacterRoleProfile[] }) => {
+        const map: Record<string, CharacterRoleProfile> = {};
+        for (const c of d.characters ?? []) map[c.characterId] = c;
+        setDetected(map);
+      })
+      .catch(() => {});
+  }, []);
+
+  const chars = party?.characters ?? [];
+  const activeChar = chars[selected];
+
+  const fetchAdvice = useCallback(async (characterId: string) => {
+    setAdvice(null);
+    setAdviceLoading(true);
+    try {
+      const res = await fetch(`/api/builds/${characterId}/advice`);
+      if (!res.ok) return;
+      setAdvice(await res.json());
+    } finally {
+      setAdviceLoading(false);
+    }
+  }, []);
+
+  // Refresh advice when profile is saved or selection changes
+  useEffect(() => {
+    if (activeChar && profiles[activeChar.uniqueId]) {
+      fetchAdvice(activeChar.uniqueId);
+    } else {
+      setAdvice(null);
+    }
+  }, [activeChar, profiles, fetchAdvice]);
+
+  function handleSaved(profile: BuildProfile) {
+    setProfiles((prev) => ({ ...prev, [profile.characterId]: profile }));
+    fetchAdvice(profile.characterId);
+  }
+
+  if (loading && !party) {
+    return <div className="text-text-dim text-sm animate-pulse">Loading...</div>;
+  }
+  if (!party) {
+    return <div className="card text-text-muted text-sm">No save data.</div>;
+  }
+
+  return (
+    <div className="flex gap-6 max-w-5xl">
+      {/* Character selector */}
+      <div className="w-36 shrink-0 space-y-1">
+        <div className="section-title">Characters</div>
+        {chars.map((c, i) => {
+          const hasProfile = !!profiles[c.uniqueId];
+          return (
+            <button
+              key={c.uniqueId}
+              onClick={() => setSelected(i)}
+              className={[
+                "w-full text-left px-3 py-2 rounded text-sm transition-colors",
+                i === selected
+                  ? "bg-bg-elevated border border-bg-border2 text-purple"
+                  : "text-text-muted hover:text-text-base hover:bg-bg-elevated",
+              ].join(" ")}
+            >
+              <div className="font-semibold truncate flex items-center gap-1">
+                {hasProfile && <span className="text-green text-xs">●</span>}
+                {c.name}
+              </div>
+              {c.class && (
+                <div className="text-xs text-text-dim truncate">
+                  {c.class.className} {c.class.level}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Main panel */}
+      {activeChar && (
+        <div className="flex-1 space-y-5 overflow-auto">
+          {/* Character header */}
+          <div>
+            <div className="text-lg font-bold text-text-base">
+              {activeChar.name}
+              {activeChar.isPlayerCharacter && <span className="ml-2 text-yellow text-sm">★ Player</span>}
+            </div>
+            {activeChar.class && (
+              <div className="text-sm text-purple mt-0.5">
+                {activeChar.class.className}
+                {activeChar.class.archetypeName && (
+                  <span className="text-text-dim font-normal"> — {activeChar.class.archetypeName}</span>
+                )}
+                <span className="ml-2 text-orange">Level {activeChar.class.level}</span>
+                {profiles[activeChar.uniqueId]?.mythicPath && (
+                  <span className="ml-2 text-cyan">· {profiles[activeChar.uniqueId].mythicPath}</span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* AI build analysis — ALWAYS FIRST, key resets on character change */}
+          <div className="card space-y-2">
+            <div className="section-title text-purple">AI Build Analysis</div>
+            <p className="text-xs text-text-dim">
+              {activeChar.isPlayerCharacter
+                ? `Feat progression, gear priorities, and next-level recommendations for ${activeChar.name}.`
+                : `${activeChar.name} is auto-leveled — how they play, their strengths, and how to use them effectively.`}
+            </p>
+            <AiStream
+              key={activeChar.uniqueId}
+              label="✦ Analyse Build"
+              prompt={[
+                activeChar.isPlayerCharacter
+                  ? `Give me a detailed build analysis and actionable next-level guide for ${activeChar.name}.`
+                  : `${activeChar.name} is an auto-leveled companion — explain their preset build, how to play them, and how to use them effectively in the party.`,
+                activeChar.class
+                  ? `${activeChar.class.level} levels of ${activeChar.class.className}${activeChar.class.archetypeName ? ` (${activeChar.class.archetypeName} archetype)` : ""}.`
+                  : "",
+                activeChar.mythicPath ? `Mythic path: ${activeChar.mythicPath} (Tier ${activeChar.mythicLevel ?? "?"}).` : "",
+                activeChar.isPlayerCharacter
+                  ? `Focus on: best next feats, how to maximise damage/effectiveness, gear to prioritise. Be specific.`
+                  : `Cover: their role, key class features, combat style, gear recommendations, and any synergies with the rest of the party.`,
+                profiles[activeChar.uniqueId]
+                  ? `Intended role: ${profiles[activeChar.uniqueId].role} (${profiles[activeChar.uniqueId].classPath})${profiles[activeChar.uniqueId].notes ? `. Notes: ${profiles[activeChar.uniqueId].notes}` : ""}.`
+                  : "",
+              ].filter(Boolean).join(" ")}
+            />
+          </div>
+
+          {/* Build config — always shown for PC, collapsed for companions */}
+          {activeChar.isPlayerCharacter ? (
+            <BuildEditor
+              key={activeChar.uniqueId}
+              characterId={activeChar.uniqueId}
+              characterName={activeChar.name}
+              char={activeChar}
+              initial={profiles[activeChar.uniqueId] ?? null}
+              detected={detected[activeChar.uniqueId] ?? null}
+              onSaved={handleSaved}
+            />
+          ) : (
+            <details className="card">
+              <summary className="cursor-pointer text-xs text-text-dim hover:text-text-muted select-none">
+                Configure build profile for {activeChar.name} (optional)
+              </summary>
+              <div className="mt-3">
+                <BuildEditor
+                  key={activeChar.uniqueId}
+                  characterId={activeChar.uniqueId}
+                  characterName={activeChar.name}
+                  char={activeChar}
+                  initial={profiles[activeChar.uniqueId] ?? null}
+                  detected={detected[activeChar.uniqueId] ?? null}
+                  onSaved={handleSaved}
+                />
+              </div>
+            </details>
+          )}
+
+          {/* Rule-based score — only if a profile is saved */}
+          {profiles[activeChar.uniqueId] && (
+            <details className="card">
+              <summary className="cursor-pointer text-xs text-text-dim hover:text-text-muted select-none">
+                Rule-based build score {advice ? `— ${advice.alignmentScore}/100` : "(save profile to compute)"}
+                {!activeChar.isPlayerCharacter && <span className="ml-1 text-orange">(auto-leveled — informational only)</span>}
+              </summary>
+              <div className="mt-3 space-y-3">
+                {adviceLoading && <div className="text-text-dim text-sm animate-pulse">Computing...</div>}
+                {!adviceLoading && advice && <AdvicePanel advice={advice} />}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

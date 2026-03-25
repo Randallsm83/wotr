@@ -18,8 +18,8 @@ function relay(proc: ReturnType<typeof Bun.spawn>, label: string, color: string)
   const pfx = prefix(label, color);
   const decoder = new TextDecoder();
 
-  async function pipe(stream: ReadableStream<Uint8Array> | null, isErr = false) {
-    if (!stream) return;
+  async function pipe(stream: ReadableStream<Uint8Array> | null | undefined | number, isErr = false) {
+    if (!stream || typeof stream === "number") return;
     const reader = stream.getReader();
     while (true) {
       const { done, value } = await reader.read();
