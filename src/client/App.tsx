@@ -5,16 +5,20 @@ import PartyAnalysis from "./pages/PartyAnalysis.tsx";
 import BubbleBuffsPage from "./pages/BubbleBuffs.tsx";
 import Characters from "./pages/Characters.tsx";
 import Chat from "./pages/Chat.tsx";
+import BuildPlanner from "./pages/BuildPlanner.tsx";
+import PartyBuilder from "./pages/PartyBuilder.tsx";
 import { useLiveSave } from "./hooks/useLiveSave.ts";
 
-type Page = "dashboard" | "characters" | "spells" | "analysis" | "bubbles" | "chat";
+type Page = "dashboard" | "characters" | "spells" | "analysis" | "bubbles" | "builds" | "party" | "chat";
 
 const NAV: { id: Page; label: string; icon: string }[] = [
   { id: "dashboard",  label: "Dashboard",      icon: "⚔" },
   { id: "characters", label: "Characters",      icon: "▦" },
   { id: "spells",     label: "Spell Planner",   icon: "✦" },
-  { id: "analysis",   label: "Party Analysis",  icon: "⊞" },
+  { id: "analysis",   label: "Analysis",         icon: "⊞" },
   { id: "bubbles",    label: "BubbleBuffs",     icon: "◎" },
+  { id: "builds",     label: "Build Planner",   icon: "◉" },
+  { id: "party",      label: "Party Builder",   icon: "⌸" },
   { id: "chat",       label: "AI Advisor",      icon: "◈" },
 ];
 
@@ -61,6 +65,8 @@ export default function App() {
         {page === "spells"    && <SpellPlanner />}
         {page === "analysis"  && <PartyAnalysis />}
         {page === "bubbles"   && <BubbleBuffsPage />}
+        {page === "builds"    && <BuildPlanner />}
+        {page === "party"     && <PartyBuilder />}
         {page === "chat"      && <Chat />}
       </main>
     </div>

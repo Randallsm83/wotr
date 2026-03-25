@@ -30,10 +30,10 @@ export default function Chat() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  async function send() {
-    const text = input.trim();
+  async function send(override?: string) {
+    const text = (override ?? input).trim();
     if (!text || streaming) return;
-    setInput("");
+    if (!override) setInput("");
 
     const userMsg: Message = { role: "user", content: text };
     setMessages((prev) => [...prev, userMsg]);
@@ -192,7 +192,7 @@ export default function Chat() {
         {SLASH_COMMANDS.map((c) => (
           <button
             key={c.cmd}
-            onClick={() => { setInput(c.cmd); inputRef.current?.focus(); }}
+            onClick={() => send(c.cmd)}
             className="text-xs px-2 py-0.5 rounded border border-bg-border2 text-text-dim hover:text-purple hover:border-purple/50 transition-colors"
           >
             {c.cmd}
@@ -212,7 +212,7 @@ export default function Chat() {
           className="flex-1 bg-bg-panel border border-bg-border rounded px-3 py-2 text-sm text-text-base placeholder:text-text-dim focus:outline-none focus:border-purple/50 disabled:opacity-50"
         />
         <button
-          onClick={send}
+          onClick={() => send()}
           disabled={streaming || !input.trim()}
           className="px-4 py-2 rounded bg-purple/20 border border-purple/30 text-purple text-sm hover:bg-purple/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >

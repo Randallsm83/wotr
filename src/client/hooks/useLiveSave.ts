@@ -4,7 +4,7 @@ import type { PartyData } from "../../../src/server/models/types.ts";
 export function useLiveSave() {
   const [party, setParty] = useState<PartyData | null>(null);
   const [analysis, setAnalysis] = useState<any | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 

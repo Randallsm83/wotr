@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import AiStream from "../components/AiStream.tsx";
 
 interface BbBuff {
   spellGuid: string;
@@ -24,6 +25,9 @@ interface MissingBuff {
   groupTip: string;
   target: string;
   caster: string;
+  casterId: string;
+  spellbookId: string;
+  wantedIds: string[];
   effect: string;
 }
 
@@ -80,25 +84,45 @@ export default function BubbleBuffs() {
 
   return (
     <div className="space-y-6 max-w-3xl">
-      <div className="flex items-center justify-between">
-        <h2 className="text-purple font-bold text-sm tracking-widest uppercase">BubbleBuffs</h2>
-        <div className="flex gap-3 text-xs text-text-dim">
-          <span><span className="text-green">{data.stats?.active}</span> configured</span>
-          <span><span className="text-orange">{data.stats?.missing}</span> missing</span>
-          {(data.stats?.blacklisted ?? 0) > 0 && (
-            <span><span className="text-red">{data.stats?.blacklisted}</span> blacklisted</span>
-          )}
+      <div>
+        <div className="flex items-center justify-between">
+          <h2 className="text-purple font-bold text-sm tracking-widest uppercase">BubbleBuffs</h2>
+          <div className="flex gap-3 text-xs text-text-dim">
+            <span><span className="text-green">{data.stats?.active}</span> configured</span>
+            <span><span className="text-orange">{data.stats?.missing}</span> missing</span>
+            {(data.stats?.blacklisted ?? 0) > 0 && (
+              <span><span className="text-red">{data.stats?.blacklisted}</span> blacklisted</span>
+            )}
+          </div>
         </div>
+        <p className="text-xs text-text-dim mt-1">
+          BubbleBuffs auto-casts pre-combat spells before each fight. Configure which spells to cast and who receives them.
+        </p>
       </div>
 
-      {/* Settings info */}
-      <div className="card flex gap-6 text-xs">
-        <div><span className="text-text-dim">Verbose casting: </span>
-          <span className={data.verboseCasting ? "text-green" : "text-text-dim"}>{data.verboseCasting ? "on" : "off"}</span>
+      {/* Settings info + AI */}
+      <div className="card space-y-3">
+        <div className="flex gap-6 text-xs">
+          <div><span className="text-text-dim">Verbose casting: </span>
+            <span className={data.verboseCasting ? "text-green" : "text-text-dim"}>{data.verboseCasting ? "on" : "off"}</span>
+          </div>
+          <div><span className="text-text-dim">Allow in combat: </span>
+            <span className={data.allowInCombat ? "text-yellow" : "text-text-dim"}>{data.allowInCombat ? "on" : "off"}</span>
+          </div>
         </div>
-        <div><span className="text-text-dim">Allow in combat: </span>
-          <span className={data.allowInCombat ? "text-yellow" : "text-text-dim"}>{data.allowInCombat ? "on" : "off"}</span>
-        </div>
+        <AiStream
+          label="✦ Get AI Buff Guide"
+          prompt={[
+            "Give me a prioritised BubbleBuffs setup guide for my current party.",
+            active.length > 0
+              ? `Already configured (${active.length}): ${active.slice(0, 10).map((b) => b.spellName).join(", ")}.`
+              : "Nothing configured yet.",
+            missing.length > 0
+              ? `Missing from BubbleBuffs (${missing.length}): ${missing.slice(0, 12).map((b) => b.name).join(", ")}.`
+              : "",
+            "For each missing buff: which group (Short/Important/Normal) should it go in, who should cast it, and who should receive it? Also flag any currently configured buffs that are in the wrong group or redundant.",
+          ].filter(Boolean).join(" ")}
+        />
       </div>
 
       {/* Missing buffs — full instructions */}
@@ -115,11 +139,45 @@ export default function BubbleBuffs() {
         };
 
         function BuffRow({ s }: { s: MissingBuff }) {
+          const [addState, setAddState] = useState<"idle" | "adding" | "done" | "err">("idle");
+
+          async function handleAdd() {
+            setAddState("adding");
+            try {
+              const res = await fetch("/api/bubbles/add", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  spellGuid:   s.guid,
+                  inGroup:     s.group,
+                  wantedIds:   s.wantedIds,
+                  casterId:    s.casterId,
+                  spellbookId: s.spellbookId,
+                }),
+              });
+              setAddState(res.ok ? "done" : "err");
+            } catch {
+              setAddState("err");
+            }
+          }
+
           return (
             <div className="rounded bg-bg-elevated p-3 space-y-1.5">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="badge-warn font-semibold">{s.name}</span>
                 <span className="text-xs text-text-dim">{s.isCantrip ? "cantrip" : `L${s.level} spell`}</span>
+                <button
+                  onClick={handleAdd}
+                  disabled={addState === "adding" || addState === "done"}
+                  className={[
+                    "ml-auto text-xs px-2 py-0.5 rounded border transition-colors",
+                    addState === "done" ? "border-green/40 text-green bg-green/10 cursor-default" :
+                    addState === "err"  ? "border-red/40 text-red" :
+                    "border-purple/40 text-purple hover:bg-purple/10",
+                  ].join(" ")}
+                >
+                  {addState === "adding" ? "Adding..." : addState === "done" ? "✓ Added" : addState === "err" ? "Error" : "+ Add"}
+                </button>
               </div>
               {s.effect && <div className="text-xs text-cyan">{s.effect}</div>}
               <div className="grid grid-cols-3 gap-2 text-xs mt-1">
@@ -185,7 +243,7 @@ export default function BubbleBuffs() {
             <div className="section-title mb-0">
               <span className={GROUP_COLOR[groupName] ?? "text-text-muted"}>{groupName} Duration</span>
             </div>
-            <span className="text-xs text-text-dim">{buffs.length} buffs</span>
+            <span className="text-xs text-text-dim">{buffs.length} {buffs.length === 1 ? "buff" : "buffs"}</span>
           </div>
           <div className="space-y-2">
             {buffs.map((b) => (
