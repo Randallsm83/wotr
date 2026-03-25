@@ -10,6 +10,9 @@ data/builds.json
 # Generated HTML output (party guide, character builds)
 *.html
 
+# Local launcher (machine-specific path)
+launch.ps1
+
 # Config — never commit secrets
 .env
 
