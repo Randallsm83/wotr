@@ -320,6 +320,138 @@ function BuildEditor({ characterId, characterName, char, initial, detected, onSa
   );
 }
 
+// ─── Respec prompt builder ───────────────────────────────────────────────────
+
+function buildRespeccPrompt(
+  char: CharacterData,
+  target: string,
+  targetMythic: string,
+  notes: string
+): string {
+  const currentBuild = char.class
+    ? `${char.class.className}${char.class.archetypeName ? ` (${char.class.archetypeName})` : ""} level ${char.class.level}`
+    : "unknown class";
+
+  const stats = char.stats
+    ? `STR ${char.stats.str} / DEX ${char.stats.dex} / CON ${char.stats.con} / INT ${char.stats.int} / WIS ${char.stats.wis} / CHA ${char.stats.cha}`
+    : "";
+
+  const feats = (char.feats ?? [])
+    .slice(0, 20)
+    .map((f) => `Lv${f.level}: ${f.name}`)
+    .join(", ");
+
+  const mythic = char.mythicPath
+    ? `${char.mythicPath} Tier ${char.mythicLevel ?? "?"}`
+    : "";
+
+  return [
+    `Generate a complete WotR respec guide for ${char.name}.`,
+    `Current build: ${currentBuild}.`,
+    stats && `Current stats: ${stats}.`,
+    mythic && `Current mythic: ${mythic}.`,
+    feats && `Current feats: ${feats}.`,
+    `Target build: ${target}.`,
+    targetMythic && `Target mythic path: ${targetMythic}.`,
+    notes && `Goals/notes: ${notes}.`,
+    `Provide:\n` +
+    `1. Point-buy attribute spread optimised for the target build.\n` +
+    `2. Complete level-by-level feat selections from level 1 to 20 — highlight the choices at level ${char.class?.level ?? "?"} for the immediate respec.\n` +
+    `3. Skill point allocation priorities each level.\n` +
+    `4. Mythic ability picks as each tier unlocks.\n` +
+    `5. Any multiclass dips or prestige class entries — which level to dip and why.\n` +
+    `6. Key gear milestones to prioritise.`,
+    `Use WotR mechanic names, flag feat prerequisites, and be specific.`,
+  ].filter(Boolean).join(" ");
+}
+
+// ─── Respec planner panel ─────────────────────────────────────────────────────
+
+function RespeccPanel({ char }: { char: CharacterData }) {
+  const inputClass =
+    "w-full bg-bg-elevated border border-bg-border2 rounded px-3 py-2 text-sm text-text-base placeholder:text-text-dim focus:outline-none focus:border-orange/50";
+
+  const [target, setTarget]           = useState("");
+  const [targetMythic, setTargetMythic] = useState("");
+  const [notes, setNotes]             = useState("");
+  // Stable key for AiStream — changes only when character or submitted target changes
+  const [submittedTarget, setSubmittedTarget] = useState("");
+  const [prompt, setPrompt] = useState("");
+
+  // Reset when character changes
+  useEffect(() => {
+    setTarget("");
+    setTargetMythic("");
+    setNotes("");
+    setSubmittedTarget("");
+    setPrompt("");
+  }, [char.uniqueId]);
+
+  function generate() {
+    if (!target.trim()) return;
+    setPrompt(buildRespeccPrompt(char, target, targetMythic, notes));
+    setSubmittedTarget(target.trim());
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-text-dim">
+        Describe your target build and get a full level-by-level respec guide — attribute spread,
+        feat order, skill points, and mythic picks.
+      </p>
+
+      <div>
+        <label className="block text-xs text-text-dim mb-1">Target Build <span className="text-orange">*</span></label>
+        <input
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && generate()}
+          placeholder="e.g. Cavalier 10 / Fighter 5, mounted TWF, STR-focused"
+          className={inputClass}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs text-text-dim mb-1">Target Mythic Path</label>
+          <input
+            value={targetMythic}
+            onChange={(e) => setTargetMythic(e.target.value)}
+            placeholder="e.g. Legend, Angel..."
+            className={inputClass}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-text-dim mb-1">Goals / Notes</label>
+          <input
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="e.g. Cornugon Smash chain"
+            className={inputClass}
+          />
+        </div>
+      </div>
+
+      <button
+        onClick={generate}
+        disabled={!target.trim()}
+        className="px-4 py-2 rounded bg-orange/20 border border-orange/30 text-orange text-sm hover:bg-orange/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        ✦ Generate Respec Guide
+      </button>
+
+      {submittedTarget && prompt && (
+        <AiStream
+          key={`${char.uniqueId}-respec-${submittedTarget}`}
+          label="✦ Generate Respec Guide"
+          prompt={prompt}
+          accent="orange"
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function BuildPlanner() {
@@ -503,6 +635,16 @@ export default function BuildPlanner() {
               </div>
             </details>
           )}
+
+          {/* Respec planner */}
+          <details className="card">
+            <summary className="cursor-pointer text-xs text-text-dim hover:text-text-muted select-none">
+              Respec Planner — full level-by-level guide for a new build
+            </summary>
+            <div className="mt-3">
+              <RespeccPanel key={activeChar.uniqueId} char={activeChar} />
+            </div>
+          </details>
 
           {/* Rule-based score — only if a profile is saved */}
           {profiles[activeChar.uniqueId] && (
