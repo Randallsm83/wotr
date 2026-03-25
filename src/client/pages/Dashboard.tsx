@@ -49,7 +49,6 @@ export default function Dashboard() {
         <div className="section-title">Current Save</div>
         <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-sm">
           <div><span className="text-text-dim">Player: </span><span className="text-text-base">{meta.playerCharacterName}</span></div>
-          <div><span className="text-text-dim">Area: </span><span className="text-text-base">{meta.area.slice(0, 40)}</span></div>
           <div><span className="text-text-dim">Play time: </span><span className="text-text-base">{meta.gameTotalTime.slice(0, 8)}</span></div>
           <div><span className="text-text-dim">Mods: </span><span className="text-text-base">{meta.mods.length}</span></div>
         </div>
@@ -108,6 +107,18 @@ export default function Dashboard() {
                   </div>
                 )}
 
+                {/* HP status — only show when wounded or dying */}
+                {char.stats && char.stats.hp < char.stats.hpMax && (
+                  <div className="mt-1 text-xs">
+                    {char.stats.hp <= 0
+                      ? <span className="text-red font-semibold">☠️ Dying ({char.stats.hp}/{char.stats.hpMax} HP)</span>
+                      : char.stats.hp < char.stats.hpMax * 0.5
+                      ? <span className="text-orange">▼ {char.stats.hp}/{char.stats.hpMax} HP</span>
+                      : null
+                    }
+                  </div>
+                )}
+
                 {!char.spellbook && (
                   <div className="text-xs text-text-dim">Non-caster — no spells</div>
                 )}
@@ -124,12 +135,12 @@ export default function Dashboard() {
           <div className="card space-y-3">
             <div className="flex flex-wrap gap-2">
               {[
-                { key: "hasAoeBuff",          label: "AOE Buff",   ok: analysis.party.hasAoeBuff },
-                { key: "hasProtectionFromEvil", label: "Prot Evil", ok: analysis.party.hasProtectionFromEvil },
-                { key: "hasMagicWeapon",      label: "Magic Wep",  ok: analysis.party.hasMagicWeapon },
-                { key: "hasGroupHeal",        label: "Group Heal", ok: analysis.party.hasGroupHeal },
-                { key: "hasCC",               label: "CC",         ok: analysis.party.hasCC },
-                { key: "hasSummon",           label: "Summon",     ok: analysis.party.hasSummon },
+                { key: "hasAoeBuff",          label: "AoE Buff",       ok: analysis.party.hasAoeBuff },
+                { key: "hasProtectionFromEvil", label: "Prot. Evil",    ok: analysis.party.hasProtectionFromEvil },
+                { key: "hasMagicWeapon",      label: "Magic Weapon",   ok: analysis.party.hasMagicWeapon },
+                { key: "hasGroupHeal",        label: "Group Heal",     ok: analysis.party.hasGroupHeal },
+                { key: "hasCC",               label: "Crowd Control",  ok: analysis.party.hasCC },
+                { key: "hasSummon",           label: "Summon",         ok: analysis.party.hasSummon },
               ].map(({ key, label, ok }) => (
                 <span key={key} className={ok ? "badge-ok" : "badge-missing"}>
                   {ok ? "✓" : "✗"} {label}
