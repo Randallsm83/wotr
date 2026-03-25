@@ -25,7 +25,7 @@ export default function PartyAnalysis() {
               <div className="text-xs text-text-dim uppercase tracking-wider mb-1">Available Buffs</div>
               <div className="flex flex-wrap gap-1">
                 {char.availableBuffs.map((s: any) => (
-                  <span key={s.blueprintId} className="badge-buff">{s.name}</span>
+                  <span key={s.blueprintId} className="badge-buff">{s.displayName || s.name}</span>
                 ))}
               </div>
             </div>
@@ -36,7 +36,7 @@ export default function PartyAnalysis() {
               <div className="text-xs text-text-dim uppercase tracking-wider mb-1">Available Heals</div>
               <div className="flex flex-wrap gap-1">
                 {char.availableHeals.map((s: any) => (
-                  <span key={s.blueprintId} className="badge-heal">{s.name}</span>
+                  <span key={s.blueprintId} className="badge-heal">{s.displayName || s.name}</span>
                 ))}
               </div>
             </div>
@@ -47,7 +47,7 @@ export default function PartyAnalysis() {
               <div className="text-xs text-text-dim uppercase tracking-wider mb-1">Crowd Control</div>
               <div className="flex flex-wrap gap-1">
                 {char.availableCC.map((s: any) => (
-                  <span key={s.blueprintId} className="badge-cc">{s.name}</span>
+                  <span key={s.blueprintId} className="badge-cc">{s.displayName || s.name}</span>
                 ))}
               </div>
             </div>
@@ -58,7 +58,7 @@ export default function PartyAnalysis() {
               <div className="text-xs text-orange uppercase tracking-wider mb-1">Known but NOT Prepared</div>
               <div className="flex flex-wrap gap-1">
                 {char.notPreparedBuffs.map((s: any) => (
-                  <span key={s.blueprintId} className="badge-warn">{s.name}</span>
+                  <span key={s.blueprintId} className="badge-warn">{s.displayName || s.name}</span>
                 ))}
               </div>
             </div>

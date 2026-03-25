@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useLiveSave } from "../hooks/useLiveSave.ts";
 import type { CharacterData, SpellEntry } from "../../../src/server/models/types.ts";
 
@@ -15,9 +16,13 @@ function spellCategory(name: string): "cantrip" | "buff" | "heal" | "cc" | "dama
   return "other";
 }
 
-const CATEGORY_BADGE: Record<string, string> = {
-  buff: "badge-buff", heal: "badge-heal", cc: "badge-cc",
-  damage: "badge-damage", cantrip: "badge-cantrip", other: "text-text-dim text-xs",
+const CATEGORY_COLOR: Record<string, string> = {
+  buff: "text-blue border-blue/40",
+  heal: "text-green border-green/40",
+  cc: "text-cyan border-cyan/40",
+  damage: "text-red border-red/40",
+  cantrip: "text-purple border-purple/30",
+  other: "text-text-dim border-bg-border2",
 };
 
 function SpellRow({ spell, prepared }: { spell: SpellEntry; prepared: boolean }) {
@@ -25,13 +30,10 @@ function SpellRow({ spell, prepared }: { spell: SpellEntry; prepared: boolean })
   return (
     <div className={`flex items-center justify-between py-1 px-2 rounded ${prepared ? "bg-bg-elevated" : ""}`}>
       <div className="flex items-center gap-2">
-        <span className={CATEGORY_BADGE[cat] || "text-text-dim text-xs"}>
+        <span className={`text-xs w-5 text-center rounded border px-0.5 ${CATEGORY_COLOR[cat] ?? CATEGORY_COLOR.other}`}>
           {spell.isCantrip ? "0" : spell.spellLevel}
         </span>
-        <span className="text-sm text-text-base">{spell.name}</span>
-        {spell.displayName && spell.displayName !== spell.name && (
-          <span className="text-xs text-text-dim">({spell.displayName})</span>
-        )}
+        <span className="text-sm text-text-base">{spell.displayName || spell.name}</span>
       </div>
       <div className="flex items-center gap-2">
         {prepared && <span className="text-xs text-green">prepared</span>}
@@ -102,24 +104,45 @@ function CasterCard({ char }: { char: CharacterData }) {
 
 export default function SpellPlanner() {
   const { party, loading } = useLiveSave();
+  const [selectedIdx, setSelectedIdx] = useState(0);
 
   if (loading && !party) {
     return <div className="text-text-dim text-sm animate-pulse">Loading...</div>;
   }
 
   const casters = party?.characters.filter((c) => c.spellbook) ?? [];
+  const activeCaster = casters[Math.min(selectedIdx, casters.length - 1)];
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-4 max-w-3xl">
       <h2 className="text-purple font-bold text-sm tracking-widest uppercase">Spell Planner</h2>
 
       {casters.length === 0 && (
         <div className="card text-text-muted text-sm">No spellcasters found in current save.</div>
       )}
 
-      {casters.map((char) => (
-        <CasterCard key={char.uniqueId} char={char} />
-      ))}
+      {/* Caster selector */}
+      {casters.length > 1 && (
+        <div className="flex gap-1 flex-wrap">
+          {casters.map((c, i) => (
+            <button
+              key={c.uniqueId}
+              onClick={() => setSelectedIdx(i)}
+              className={[
+                "text-xs px-3 py-1.5 rounded border transition-colors",
+                i === selectedIdx
+                  ? "bg-bg-elevated border-bg-border2 text-purple"
+                  : "border-bg-border text-text-muted hover:text-text-base hover:bg-bg-elevated",
+              ].join(" ")}
+            >
+              {c.name}
+              {c.class && <span className="ml-1 opacity-50">{c.class.className} {c.class.level}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {activeCaster && <CasterCard char={activeCaster} />}
     </div>
   );
 }
