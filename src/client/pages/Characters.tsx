@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useLiveSave } from "../hooks/useLiveSave.ts";
 import type { CharacterData } from "../../../src/server/models/types.ts";
 
@@ -227,11 +227,15 @@ function CharacterSheet({ char }: { char: CharacterData }) {
       {/* Chosen Feats */}
       {feats.length > 0 && (
         <div className="card">
-          <div className="section-title">Feats & Class Features</div>
+          <div className="section-title">Feats &amp; Class Features</div>
+          <div className="flex items-center gap-2 px-2 py-0.5 text-[10px] text-text-dim border-b border-bg-border mb-1">
+            <span className="w-5 shrink-0">Lv</span>
+            <span>Feat / ability (character level acquired)</span>
+          </div>
           <div className="space-y-1">
             {(showAllFeats ? feats : feats.slice(0, 12)).map((f) => (
               <div key={f.guid} className="flex items-center gap-2 py-0.5 px-2 rounded hover:bg-bg-elevated">
-                <span className="text-xs text-text-dim w-5 shrink-0">L{f.level}</span>
+                <span className="text-xs text-text-dim w-5 shrink-0">{f.level}</span>
                 <span className="text-xs text-text-muted">{f.name}</span>
               </div>
             ))}
@@ -278,6 +282,12 @@ function CharacterSheet({ char }: { char: CharacterData }) {
 export default function Characters() {
   const { party, loading } = useLiveSave();
   const [selected, setSelected] = useState(0);
+  const sheetRef = useRef<HTMLDivElement>(null);
+
+  // Scroll the character sheet back to top whenever the selected character changes
+  useEffect(() => {
+    sheetRef.current?.scrollTo(0, 0);
+  }, [selected]);
 
   if (loading && !party) {
     return <div className="text-text-dim text-sm animate-pulse">Loading...</div>;
@@ -316,7 +326,7 @@ export default function Characters() {
       </div>
 
       {/* Sheet */}
-      <div className="flex-1 overflow-auto">
+      <div ref={sheetRef} className="flex-1 overflow-auto">
         {active && <CharacterSheet char={active} />}
       </div>
     </div>
