@@ -4,6 +4,31 @@ import type { BuildProfile, BuildAdvice, BuildRole, CharacterRoleProfile, Charac
 import { BUILD_ROLE_LABELS } from "../../../src/server/models/types.ts";
 import AiStream from "../components/AiStream.tsx";
 
+// ─── Guide rec card (inline in Build Planner) ─────────────────────────────────
+
+interface GuideRec { feat: string; why: string; priority: "high" | "med" | "low"; spell?: string; }
+interface BuildGuideData { recommendations: Record<string, GuideRec>; }
+
+function GuideRecBanner({ rec, charName }: { rec: GuideRec; charName: string }) {
+  const accent =
+    rec.priority === "high" ? { border: "border-orange/40", bg: "bg-orange/5",  text: "text-orange", bar: "border-l-orange" } :
+    rec.priority === "med"  ? { border: "border-cyan/30",   bg: "bg-cyan/5",    text: "text-cyan",   bar: "border-l-cyan"   } :
+                              { border: "border-bg-border2", bg: "bg-bg-elevated", text: "text-text-dim", bar: "border-l-bg-border2" };
+  return (
+    <div className={`card space-y-2 border-l-4 ${accent.bar} ${accent.bg} ${accent.border}`}>
+      <div className="flex items-center gap-2">
+        <span className="section-title">Guide Recommendation — {charName}</span>
+        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${accent.border} ${accent.text}`}>
+          {rec.priority.toUpperCase()}
+        </span>
+      </div>
+      <div className={`text-sm font-semibold ${accent.text}`}>{rec.feat}</div>
+      <div className="text-xs text-text-muted leading-relaxed">{rec.why}</div>
+      {rec.spell && <div className="text-xs text-cyan">📖 {rec.spell}</div>}
+    </div>
+  );
+}
+
 // ─── Score bar ────────────────────────────────────────────────────────────────
 
 function ScoreBar({ score }: { score: number }) {
@@ -115,11 +140,22 @@ function AdvicePanel({ advice }: { advice: BuildAdvice }) {
 
 // ─── Build editor ─────────────────────────────────────────────────────────────
 
-// Map party-builder primaryRole label → BuildRole
-const LABEL_TO_ROLE: Record<string, BuildRole> = {
-  Frontline: "tank", Damage: "melee-dps", Healer: "healer",
-  Buffer: "buffer",  Control: "controller", Utility: "support",
-};
+const CASTER_CLASSES = /witch|wizard|sorcerer|oracle|shaman|druid|cleric|warpriest|bard|arcanist|skald|inquisitor/i;
+
+/** Map detected primary-role label + class to a BuildRole. */
+function autoDetectRole(primaryRole: string, className?: string): BuildRole {
+  const cn = className ?? "";
+  if (primaryRole === "Damage") {
+    // Casters doing damage do it with spells, not melee — map to caster roles
+    if (CASTER_CLASSES.test(cn)) return "arcane-caster";
+    return "melee-dps";
+  }
+  const MAP: Record<string, BuildRole> = {
+    Frontline: "tank", Healer: "healer", Buffer: "buffer",
+    Control: "controller", Utility: "support",
+  };
+  return MAP[primaryRole] ?? "support";
+}
 
 interface EditorProps {
   characterId: string;
@@ -149,7 +185,7 @@ function detectClassPath(char: CharacterData | undefined): string {
 }
 
 function BuildEditor({ characterId, characterName, char, initial, detected, onSaved }: EditorProps) {
-  const detectedRole: BuildRole = LABEL_TO_ROLE[detected?.primaryRole ?? ""] ?? "support";
+  const detectedRole: BuildRole = autoDetectRole(detected?.primaryRole ?? "", char?.class?.className);
   const autoClassPath   = detectClassPath(char);
   const autoMythicPath  = char?.mythicPath ?? "";
 
@@ -455,12 +491,21 @@ function RespeccPanel({ char }: { char: CharacterData }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function BuildPlanner() {
-  const { party, loading } = useLiveSave();
+  const { party, loading, lastUpdate } = useLiveSave();
   const [selected, setSelected] = useState(0);
   const [profiles, setProfiles] = useState<Record<string, BuildProfile>>({});
   const [detected, setDetected] = useState<Record<string, CharacterRoleProfile>>({});
   const [advice, setAdvice] = useState<BuildAdvice | null>(null);
   const [adviceLoading, setAdviceLoading] = useState(false);
+  const [guideRecs, setGuideRecs] = useState<Record<string, GuideRec>>({});
+
+  // Load guide recommendations on mount and save updates
+  useEffect(() => {
+    fetch("/api/build-guide")
+      .then(r => r.ok ? r.json() as Promise<BuildGuideData> : null)
+      .then(d => d ? setGuideRecs(d.recommendations) : null)
+      .catch(() => {});
+  }, [lastUpdate]);
 
   // Load saved profiles once on mount
   useEffect(() => {
@@ -526,32 +571,46 @@ export default function BuildPlanner() {
     <div className="flex gap-6 max-w-5xl">
       {/* Character selector */}
       <div className="w-36 shrink-0 space-y-1">
-        <div className="section-title">Characters</div>
-        {chars.map((c, i) => {
+        <div className="section-title">Party</div>
+        {chars.filter(c => c.inParty).map((c, _i) => {
+          const i = chars.indexOf(c);
           const hasProfile = !!profiles[c.uniqueId];
           return (
-            <button
-              key={c.uniqueId}
-              onClick={() => setSelected(i)}
-              className={[
-                "w-full text-left px-3 py-2 rounded text-sm transition-colors",
-                i === selected
-                  ? "bg-bg-elevated border border-bg-border2 text-purple"
-                  : "text-text-muted hover:text-text-base hover:bg-bg-elevated",
-              ].join(" ")}
+            <button key={c.uniqueId} onClick={() => setSelected(i)}
+              className={["w-full text-left px-3 py-2 rounded text-sm transition-colors",
+                i === selected ? "bg-bg-elevated border border-bg-border2 text-purple"
+                : "text-text-muted hover:text-text-base hover:bg-bg-elevated"].join(" ")}
             >
               <div className="font-semibold truncate flex items-center gap-1">
                 {hasProfile && <span className="text-green text-xs">●</span>}
                 {c.name}
               </div>
-              {c.class && (
-                <div className="text-xs text-text-dim truncate">
-                  {c.class.className} {c.class.level}
-                </div>
-              )}
+              {c.class && <div className="text-xs text-text-dim truncate">{c.class.className} {c.class.level}</div>}
             </button>
           );
         })}
+        {chars.some(c => !c.inParty) && (
+          <>
+            <div className="section-title text-text-dim mt-3 pt-2 border-t border-bg-border">At Camp</div>
+            {chars.filter(c => !c.inParty).map((c, _i) => {
+              const i = chars.indexOf(c);
+              const hasProfile = !!profiles[c.uniqueId];
+              return (
+                <button key={c.uniqueId} onClick={() => setSelected(i)}
+                  className={["w-full text-left px-3 py-2 rounded text-sm transition-colors opacity-80",
+                    i === selected ? "bg-bg-elevated border border-bg-border2 text-purple"
+                    : "text-text-muted hover:text-text-base hover:bg-bg-elevated"].join(" ")}
+                >
+                  <div className="font-semibold truncate flex items-center gap-1">
+                    {hasProfile && <span className="text-green text-xs">●</span>}
+                    {c.name}
+                  </div>
+                  {c.class && <div className="text-xs text-text-dim truncate">{c.class.className} {c.class.level}</div>}
+                </button>
+              );
+            })}
+          </>
+        )}
       </div>
 
       {/* Main panel */}
@@ -577,7 +636,42 @@ export default function BuildPlanner() {
             )}
           </div>
 
-          {/* AI build analysis — ALWAYS FIRST, key resets on character change */}
+          {/* Build profile — always first */}
+          {activeChar.isPlayerCharacter ? (
+            <BuildEditor
+              key={activeChar.uniqueId}
+              characterId={activeChar.uniqueId}
+              characterName={activeChar.name}
+              char={activeChar}
+              initial={profiles[activeChar.uniqueId] ?? null}
+              detected={detected[activeChar.uniqueId] ?? null}
+              onSaved={handleSaved}
+            />
+          ) : (
+            <details className="card" open={!!profiles[activeChar.uniqueId]}>
+              <summary className="cursor-pointer text-xs text-text-dim hover:text-text-muted select-none">
+                Build profile for {activeChar.name} {profiles[activeChar.uniqueId] ? "(configured)" : "(optional)"}
+              </summary>
+              <div className="mt-3">
+                <BuildEditor
+                  key={activeChar.uniqueId}
+                  characterId={activeChar.uniqueId}
+                  characterName={activeChar.name}
+                  char={activeChar}
+                  initial={profiles[activeChar.uniqueId] ?? null}
+                  detected={detected[activeChar.uniqueId] ?? null}
+                  onSaved={handleSaved}
+                />
+              </div>
+            </details>
+          )}
+
+          {/* Guide recommendation */}
+          {guideRecs[activeChar.name] && (
+            <GuideRecBanner rec={guideRecs[activeChar.name]} charName={activeChar.name} />
+          )}
+
+          {/* AI build analysis */}
           <div className="card space-y-2">
             <div className="section-title text-purple">AI Build Analysis</div>
             <p className="text-xs text-text-dim">
@@ -606,36 +700,6 @@ export default function BuildPlanner() {
             />
           </div>
 
-          {/* Build config — always shown for PC, collapsed for companions */}
-          {activeChar.isPlayerCharacter ? (
-            <BuildEditor
-              key={activeChar.uniqueId}
-              characterId={activeChar.uniqueId}
-              characterName={activeChar.name}
-              char={activeChar}
-              initial={profiles[activeChar.uniqueId] ?? null}
-              detected={detected[activeChar.uniqueId] ?? null}
-              onSaved={handleSaved}
-            />
-          ) : (
-            <details className="card">
-              <summary className="cursor-pointer text-xs text-text-dim hover:text-text-muted select-none">
-                Configure build profile for {activeChar.name} (optional)
-              </summary>
-              <div className="mt-3">
-                <BuildEditor
-                  key={activeChar.uniqueId}
-                  characterId={activeChar.uniqueId}
-                  characterName={activeChar.name}
-                  char={activeChar}
-                  initial={profiles[activeChar.uniqueId] ?? null}
-                  detected={detected[activeChar.uniqueId] ?? null}
-                  onSaved={handleSaved}
-                />
-              </div>
-            </details>
-          )}
-
           {/* Respec planner */}
           <details className="card">
             <summary className="cursor-pointer text-xs text-text-dim hover:text-text-muted select-none">
@@ -646,12 +710,12 @@ export default function BuildPlanner() {
             </div>
           </details>
 
-          {/* Rule-based score — only if a profile is saved */}
-          {profiles[activeChar.uniqueId] && (
+          {/* Rule-based score — only for the player character (autoleveled companions won't
+               match any role checklist since they pick feats freely; the score is meaningless) */}
+          {activeChar.isPlayerCharacter && profiles[activeChar.uniqueId] && (
             <details className="card">
               <summary className="cursor-pointer text-xs text-text-dim hover:text-text-muted select-none">
                 Rule-based build score {advice ? `— ${advice.alignmentScore}/100` : "(save profile to compute)"}
-                {!activeChar.isPlayerCharacter && <span className="ml-1 text-orange">(auto-leveled — informational only)</span>}
               </summary>
               <div className="mt-3 space-y-3">
                 {adviceLoading && <div className="text-text-dim text-sm animate-pulse">Computing...</div>}
