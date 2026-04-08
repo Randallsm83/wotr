@@ -22,6 +22,10 @@ export interface SaveMeta {
   saveTime: string;
   gameTotalTime: string;
   mods: ModEntry[];
+  // Derived game-state context
+  areaName: string;   // human-readable area extracted from save name
+  actLabel: string;   // heuristic act estimate e.g. "Act 2"
+  areaTips: string[]; // curated prep tips for the current area
 }
 
 export interface ModEntry {
@@ -40,6 +44,7 @@ export interface CharacterData {
   name: string;
   blueprint: string;
   isPlayerCharacter: boolean;
+  inParty: boolean;  // true = in the active 6-person party; false = companion waiting at camp
   gender?: string;
   race?: string;
   alignment?: string;
@@ -53,6 +58,8 @@ export interface CharacterData {
   feats?: FeatEntry[];
   traits?: TraitEntry[];
   equipment?: EquipmentItem[];
+  emptySlots?: string[];      // key slots with no item equipped
+  inventory?: InventoryItem[]; // unequipped items in character's bag
   spellbook?: SpellbookData;
 }
 
@@ -78,10 +85,17 @@ export interface FeatEntry {
 }
 
 export interface EquipmentItem {
-  slot: string;          // "MainHand", "Armor", "Ring1", etc.
+  slot: string;          // "Main Hand", "Armor", "Ring 1", etc.
   blueprintId: string;
   name: string;          // resolved blueprint name
   itemType: string;      // "Weapon", "Armor", "Shield", "Equipment"
+  isIdentified: boolean;
+}
+
+export interface InventoryItem {
+  blueprintId: string;
+  name: string;
+  itemType: "Weapon" | "Armor" | "Consumable" | "Equipment";
   isIdentified: boolean;
 }
 

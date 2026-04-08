@@ -5,7 +5,7 @@ import { lookupBlueprintsMany } from "./blueprint-db.ts";
 import type {
   PartyData, SaveMeta, CharacterData, ClassInfo,
   SpellbookData, SpellEntry, PreparedLevel, PreparedSlot, SlotInfo,
-  CharacterStats, FeatEntry, TraitEntry, EquipmentItem,
+  CharacterStats, FeatEntry, TraitEntry, EquipmentItem, InventoryItem,
 } from "../models/types.ts";
 
 const SAVES_DIR =
@@ -77,18 +77,82 @@ export async function parseSave(savePath?: string): Promise<PartyData | null> {
   const header  = readJson("header.json");
   const party   = readJson("party.json");
   const modList = readJson("header.json.ModList.json");
+  const player  = readJson("player.json");
   if (!header || !party) return null;
 
+  // PartyCharacters is the authoritative list of the 6 currently-active party members
+  const activePartyIds = new Set<string>(
+    Array.isArray(player?.PartyCharacters) ? player.PartyCharacters : []
+  );
+
   const meta = parseMeta(header, modList);
-  const characters = await parseParty(party, header);
+  const characters = await parseParty(party, header, activePartyIds);
   return { meta, characters };
 }
 
-// ─── Meta ─────────────────────────────────────────────────────────────────────
+// ─── Meta ─────────────────────────────────────────────────────────────────────────────────
+
+/** Extract a human-readable area name from the WotR save name.
+ *  Save names look like: "Crusader's Camp -19 Neth (XI) 4715 -00:07:09"
+ *  We take everything before the first " -\d" (the in-game date). */
+function parseAreaName(saveName: string): string {
+  const m = saveName.match(/^(.+?)\s+-\d/);
+  return (m ? m[1] : saveName.split(" -")[0]).trim();
+}
+
+/** Heuristic act estimate based on known area fragments and average party level. */
+function inferActLabel(areaName: string): string {
+  const a = areaName.toLowerCase();
+  if (/kenabres|grey garrison|blackwater|market|museum|tavern|shield maze/.test(a)) return "Act 1";
+  if (/crusader|drezen|leper|greengates|alushinyrra|arendae|colyphyr|blackrock|chasm|valley|fortress|lost.?chapel/.test(a)) return "Act 2";
+  if (/midnight fane|ivory|sanctum|abyssal|threshold|wintersun|riftgate/.test(a)) return "Act 3–5";
+  if (/worldwound|currantglen|camp/.test(a)) return "Act 2"; // most common mid-game areas
+  return "Unknown act";
+}
+
+/** Curated prep tips keyed by known area fragments. Returns generic tips as fallback. */
+function areaPrep(areaName: string): string[] {
+  const a = areaName.toLowerCase();
+
+  if (/kenabres|grey garrison|shield maze/.test(a)) return [
+    "Act 1: demons have DR/chaos. Law-aligned spells (Protection from Chaos) bypass it early.",
+    "Grey Garrison boss Staunton Vhane hits hard — stack AC and use Ember Slumber to control adds.",
+  ];
+  if (/crusader|camp/.test(a)) return [
+    "Act 2 hub: stock up on scrolls and potions at Defender's Heart merchants before each dungeon.",
+    "Your mythic path choice is coming at the Crusade Council — Angel is the best fit for Kaede's Demonslayer build.",
+    "Crusade management: rank up buildings periodically — the Recruiter and Trainer are the highest priority.",
+  ];
+  if (/lost.?chapel/.test(a)) return [
+    "Lost Chapel: corrupted crusaders, undead, and demons — Seelah's Smite Evil and Holy weapon effects are highly effective here.",
+    "Pre-buff before every room: Bless + Prayer + Resist Energy (Fire). The dungeon is linear with back-to-back encounters — stay topped up.",
+    "Camellia handles traps (Thievery 20). Send her ahead of the party when moving through narrow corridors.",
+  ];
+  if (/currantglen|greengates|leper/.test(a)) return [
+    "Act 2 open world: enemies here have DR/cold iron. Finnean (magic) bypasses it.",
+    "Resist Energy (Fire) on Kaede and Sly before every demon fight — demons spam fire AoEs.",
+    "Camellia: cast Barkskin on Kaede and Sly pre-combat. It's a 1-min duration; recast after each rest.",
+  ];
+  if (/drezen/.test(a)) return [
+    "Drezen assault: Sosiel's Prayer + Bless + Divine Favor on frontliners before breaching walls.",
+    "The Drezen commander has SR and immunities — Nenio's Haste and Glitterdust (reduces AC) are key.",
+    "After clearing Drezen, the city becomes your base — visit the artifact crafter early.",
+  ];
+
+  // Generic Act 2+ tips
+  return [
+    "Act 2+: enemies have DR/cold iron and SR 12–18. Spell Penetration and magic weapons are essential.",
+    "Nenio: cast Haste every single combat. It's the highest-value buff in the game.",
+    "Camellia: Barkskin on Kaede + Sly before each fight. StinkingCloud on packs of enemies.",
+    "Daeran: use swift-action Channel (Combat Healer revelation) to triage frontliners without pausing offense.",
+  ];
+}
 
 function parseMeta(header: any, modList: any): SaveMeta {
+  const saveName  = header.Name ?? "";
+  const areaName  = parseAreaName(saveName);
   return {
-    name: header.Name ?? "",
+    name: saveName,
     area: header.Area ?? "",
     playerCharacterName: header.PlayerCharacterName ?? "",
     saveTime: header.SystemSaveTime ?? "",
@@ -96,12 +160,15 @@ function parseMeta(header: any, modList: any): SaveMeta {
     mods: Array.isArray(modList)
       ? modList.map((m: any) => ({ id: m.Id, version: m.Version, modType: m.modType }))
       : [],
+    areaName,
+    actLabel: inferActLabel(areaName),
+    areaTips: areaPrep(areaName),
   };
 }
 
 // ─── Party ────────────────────────────────────────────────────────────────────
 
-async function parseParty(party: any, header: any): Promise<CharacterData[]> {
+async function parseParty(party: any, header: any, activePartyIds: Set<string>): Promise<CharacterData[]> {
   const rawEntities: any[] = party.m_EntityData ?? [];
   const pcName: string = header.PlayerCharacterName ?? "";
 
@@ -161,7 +228,7 @@ async function parseParty(party: any, header: any): Promise<CharacterData[]> {
 
   return entities
     .filter((e) => e.Descriptor)
-    .map((entity) => parseEntity(entity, pcName, blueprintMap));
+    .map((entity) => parseEntity(entity, pcName, blueprintMap, activePartyIds, globalIdMap));
 }
 
 // ─── JSON.NET $ref resolution ────────────────────────────────────────────────
@@ -227,7 +294,9 @@ function collectSpellGuids(sb: any, out: Set<string>) {
 function parseEntity(
   entity: any,
   pcName: string,
-  blueprintMap: Map<string, any>
+  blueprintMap: Map<string, any>,
+  activePartyIds: Set<string>,
+  idMap: Map<string, any>
 ): CharacterData {
   const desc = entity.Descriptor;
   const blueprint: string = desc.Blueprint ?? "";
@@ -280,7 +349,7 @@ function parseEntity(
   const alignment = parseAlignment(desc.Alignment);
 
   // Stats
-  const stats = parseStats(desc.Stats, desc.m_Damage ?? 0);
+  const stats = parseStats(desc.Stats, desc.m_Damage ?? 0, idMap);
 
   // Feats + extract background/deity from selections
   const { feats, background, deity } = parseFeatsAndIdentity(
@@ -306,9 +375,18 @@ function parseEntity(
   const itemRefMap = buildItemRefMap(entity);
   const equipment = parseEquipment(desc.Body, blueprintMap, itemRefMap);
 
-  return { uniqueId, name, blueprint, isPlayerCharacter: isPC, gender, race, alignment, background, deity,
+  // Empty key slots (so the UI can flag missing items)
+  const equippedSlotSet = new Set(equipment.map(e => e.slot));
+  const emptySlots = KEY_EQUIPMENT_SLOTS.filter(s => !equippedSlotSet.has(s));
+
+  // Character's unequipped inventory
+  const inventory = parseInventory(desc.Body, blueprintMap, itemRefMap);
+
+  const inParty = activePartyIds.size === 0 || activePartyIds.has(uniqueId);
+
+  return { uniqueId, name, blueprint, isPlayerCharacter: isPC, inParty, gender, race, alignment, background, deity,
     class: classInfo, allClasses, mythicPath, mythicLevel,
-    stats, feats, traits, equipment, spellbook };
+    stats, feats, traits, equipment, emptySlots, inventory, spellbook };
 }
 
 // ─── Spellbook ────────────────────────────────────────────────────────────────
@@ -371,7 +449,20 @@ function parseSpellbook(sb: any, blueprintMap: Map<string, any>): SpellbookData 
   return { blueprintId, type, casterLevel, knownSpells, preparedSpells, slots };
 }
 
-// ─── Equipment ───────────────────────────────────────────────────────────────────────────
+// Key slots every character should ideally have filled (in priority order)
+const KEY_EQUIPMENT_SLOTS = ["Neck", "Ring 1", "Ring 2", "Shoulders", "Belt", "Gloves", "Head", "Wrist", "Armor", "Main Hand"];
+
+// Blueprint type prefixes that represent real carry-able items
+const ITEM_BLUEPRINT_TYPES = new Set([
+  "BlueprintItemWeapon", "BlueprintItemArmor", "BlueprintItemEquipment",
+  "BlueprintItemShield", "BlueprintItemUsable", "BlueprintItem",
+]);
+
+function bpIsItem(bpType: string): boolean {
+  return [...ITEM_BLUEPRINT_TYPES].some(t => bpType.startsWith(t));
+}
+
+// ─── Equipment ───────────────────────────────────────────────────────────────────────────────────────
 
 // The Body descriptor has named slot fields.
 // Equipped slots have an item object (with m_Blueprint); empty slots have only $id.
@@ -399,9 +490,11 @@ function buildItemRefMap(entity: any): Map<string, { blueprint: string; identifi
     if (obj.UniqueId && obj.m_Blueprint) {
       const rawType: string = obj["$type"] ?? "";
       let itemType = "Equipment";
-      if (rawType.includes("Weapon")) itemType = "Weapon";
-      else if (rawType.includes("Shield")) itemType = "Shield";
-      else if (rawType.includes("Armor")) itemType = "Armor";
+      if (rawType.includes("Weapon"))    itemType = "Weapon";
+      else if (rawType.includes("Shield"))    itemType = "Shield";
+      else if (rawType.includes("Armor"))     itemType = "Armor";
+      else if (rawType.includes("Usable"))    itemType = "Consumable";
+      else if (rawType.includes("Simple"))    itemType = "Equipment"; // accessories/misc
       map.set(obj.UniqueId, {
         blueprint: obj.m_Blueprint,
         identified: obj.IsIdentified !== false,
@@ -450,6 +543,53 @@ function resolveSlot(
     return { blueprint: slot.m_Blueprint, identified: slot.IsIdentified !== false, type: itemType };
   }
   return null;
+}
+
+/** Collect UniqueIds referenced in Body slots (= currently equipped) */
+function equippedUniqueIds(body: any): Set<string> {
+  const ids = new Set<string>();
+  if (!body) return ids;
+  for (const key of Object.keys(BODY_SLOTS)) {
+    const ref = body[key]?.m_ItemRef;
+    if (ref) ids.add(ref);
+  }
+  const setIdx = body.m_CurrentHandsEquipmentSetIndex ?? 0;
+  const activeSet = (body.m_HandsEquipmentSets ?? [])[setIdx];
+  if (activeSet?.PrimaryHand?.m_ItemRef)   ids.add(activeSet.PrimaryHand.m_ItemRef);
+  if (activeSet?.SecondaryHand?.m_ItemRef) ids.add(activeSet.SecondaryHand.m_ItemRef);
+  return ids;
+}
+
+/**
+ * Items in the entity that are NOT currently equipped.
+ * We restrict to Consumables only (BlueprintItemUsable) because the entity tree
+ * includes references to the shared party stash, making a full inventory count
+ * unreliable and noisy. Consumables are the most actionable bag items.
+ */
+function parseInventory(
+  body: any,
+  blueprintMap: Map<string, any>,
+  itemRefMap: Map<string, { blueprint: string; identified: boolean; type: string }>
+): InventoryItem[] {
+  const equipped = equippedUniqueIds(body);
+  const items: InventoryItem[] = [];
+  const seen = new Set<string>();
+  for (const [uniqueId, { blueprint, identified, type }] of itemRefMap) {
+    if (equipped.has(uniqueId)) continue;
+    if (seen.has(blueprint)) continue;
+    const bp = blueprintMap.get(blueprint);
+    if (!bp?.name || !bp?.type) continue;
+    // Only consumables (potions, scrolls, wands) — filter by itemRefMap type, not blueprint DB type
+    if (type !== "Consumable") continue;
+    seen.add(blueprint);
+    items.push({
+      blueprintId: blueprint,
+      name: humanizeItem(bp.name),
+      itemType: "Consumable",
+      isIdentified: identified,
+    });
+  }
+  return items;
 }
 
 function parseEquipment(
@@ -506,7 +646,7 @@ const SKILL_LABEL: Record<string, string> = {
   CheckBluff: "Bluff", CheckDiplomacy: "Diplomacy", CheckIntimidate: "Intimidate",
 };
 
-function parseStats(s: any, damage: number): CharacterStats | undefined {
+function parseStats(s: any, damage: number, idMap?: Map<string, any>): CharacterStats | undefined {
   if (!s) return undefined;
 
   // Stats.SkillXxx fields are JSON.NET $ref back-references — not directly readable.
@@ -550,6 +690,23 @@ function parseStats(s: any, damage: number): CharacterStats | undefined {
   const dexMod = Math.floor((dexScore - 10) / 2);
   const hpMax = typeMap["HitPoints"] ?? 0;
   const bab   = typeMap["BaseAttackBonus"] ?? 0;
+
+  // AC: PermanentValue is always base 10; compute total from PersistentModifierList.
+  // This captures DEX, Size, Armor bonuses. Natural armor / deflection from items
+  // are applied via Facts components and are not in PersistentModifierList, so AC
+  // will be a partial undercount — but correct enough to differentiate characters.
+  const acObj = s.AC;
+  const acTotal = (() => {
+    if (!acObj || acObj["$ref"]) return typeMap["AC"] ?? 0;
+    const base: number = acObj.m_BaseValue ?? 10;
+    const mods: any[] = acObj.PersistentModifierList ?? [];
+  return base + mods.reduce((sum: number, m: any) => {
+      const resolved = (m && m["$ref"] && idMap) ? (idMap.get(m["$ref"]) ?? m) : m;
+      if (!resolved || resolved["$ref"]) return sum;
+      return sum + (resolved.ModValue ?? 0);
+    }, 0);
+  })();
+  typeMap["AC"] = acTotal;
 
   const skills: Record<string, number> = {};
   for (const [type, label] of Object.entries(SKILL_LABEL)) {
