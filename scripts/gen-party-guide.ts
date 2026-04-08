@@ -5,6 +5,7 @@
 import { parseSave, listSaves } from "../src/server/services/save-parser.ts";
 import { analyzeComposition } from "../src/server/services/party-builder.ts";
 import { getBuilds } from "../src/server/services/build-store.ts";
+import { FEAT_ANALYSIS, LVL_RECS } from "../src/server/services/build-guide.ts";
 import fs from "fs";
 import path from "path";
 
@@ -49,97 +50,7 @@ function humanClass(name: string): string {
 
 function sign(n: number): string { return n >= 0 ? `+${n}` : `${n}`; }
 
-const FEAT_ANALYSIS: Record<string, { note: string; status: "good" | "warn" | "bad" | "info" }> = {
-  TwoWeaponFighting:      { note: "TWF core — requires dual one-handed weapons",             status: "good" },
-  DoubleSlice:            { note: "Full STR to off-hand attacks",                            status: "good" },
-  PowerAttackFeature:     { note: "−1 hit / +2 dmg per 4 BAB",                              status: "good" },
-  FuriousFocus:           { note: "Negates Power Attack penalty on first attack",           status: "good" },
-  FavoriteTerrainAbyss:   { note: "+2 perception/stealth/initiative in Abyssal terrain",    status: "info" },
-  RangerStyleMenacingSelection2: { note: "Menacing combat style: +2 intimidate when flanking", status: "info" },
-  AnimalCompanionFeatureDog:    { note: "Dog companion — Stomper",                          status: "info" },
-  AnimalCompanionSelectionRanger: { note: "Ranger animal companion progression",             status: "info" },
-  Dodge:                  { note: "+1 Dodge AC — stacks with everything",                    status: "good" },
-  ShieldFocus:            { note: "+1 Shield AC",                                            status: "good" },
-  ArmorFocusHeavy:        { note: "+1 AC in heavy armor",                                   status: "good" },
-  ArmorFocusSelection:    { note: "Armor Focus selection",                                   status: "info" },
-  MercySickened:          { note: "Paladin Mercy: cures sickened on lay on hands",          status: "good" },
-  WeaponFinesse:          { note: "Use DEX for attack rolls with light/finesse weapons",     status: "good" },
-  ShamanHexIceplantFeature: { note: "Iceplant Hex: +2 Natural Armor AC",                   status: "good" },
-  CombatReflexes:         { note: "Extra AoO per round equal to DEX bonus",                 status: "good" },
-  PointBlankShot:         { note: "+1 attack/damage within 30ft",                           status: "good" },
-  PreciseShot:            { note: "No −4 penalty for shooting into melee",                  status: "good" },
-  ZenArcherWayOfTheBowLongbowFocus: { note: "Zen Archer: Weapon Focus with longbow",      status: "good" },
-  DeadlyAimFeature:       { note: "Ranged Power Attack: −1 hit / +2 dmg",                  status: "good" },
-  PointBlankMaster:       { note: "No AoO from ranged attacks while threatened",            status: "good" },
-  KiTrueStrikeFeature:    { note: "Spend 1 Ki for True Strike (auto-hit on next attack)",  status: "good" },
-  FinesseTrainingDagger:  { note: "DEX to damage with daggers (no restrictions)",          status: "good" },
-  WeakeningWoundFeature:  { note: "Inflict STR damage with sneak attacks",                  status: "good" },
-  SpellFocus:             { note: "+1 DC to chosen school spells",                          status: "good" },
-  SpellPenetration:       { note: "+2 to caster level checks to beat SR — vital vs demons", status: "good" },
-  PowerAttack:            { note: "Power Attack",                                            status: "good" },
-  WeaponFocus:            { note: "+1 attack with chosen weapon",                            status: "good" },
-  WeaponSpecialization:   { note: "+2 damage with chosen weapon (Fighter 4 required)",      status: "good" },
-  FurysFall:              { note: "Add DEX to Trip CMB (stacks with STR)",                  status: "good" },
-  WitchHexSlumberFeature: { note: "Slumber hex: Will save or sleep",                        status: "good" },
-  WitchHexVulnerabilityCurseFeature: { note: "Vulnerability Curse: +1 dmg dice from one damage type", status: "good" },
-  WitchHexHealingFeature: { note: "Healing hex: cure light wounds 1×/day per target",      status: "good" },
-};
-
-const LVL5_RECS: Record<string, { feat: string; why: string; priority: "high" | "med" | "low"; spell?: string }> = {
-  "Kaede": {
-    feat: "Outflank",
-    why: "Flanking → +4 (from +2). Crit chains with Seelah/Woljif. Prereq BAB +4 ✓",
-    priority: "high",
-    spell: "Barkskin (L2) — natural armor buff"
-  },
-  "Seelah_Companion": {
-    feat: "Dazzling Display",
-    why: "Full-round Shaken on all nearby enemies. Opens Shatter Defenses chain (makes enemies flat-footed).",
-    priority: "high"
-  },
-  "Camelia_Companion": {
-    feat: "Evil Eye Hex (via level up)",
-    why: "Best debuff in the game. −2 to saves/AC/attacks. Free action + Cackle extends it indefinitely.",
-    priority: "high"
-  },
-  "Lann_Companion": {
-    feat: "Manyshot",
-    why: "Fire 2 arrows on first attack as a standard action. Doubles opening burst damage.",
-    priority: "high"
-  },
-  "Wenduag_Companion": {
-    feat: "Rapid Shot",
-    why: "Extra ranged attack per round at −2. Essential ranged DPS upgrade at this level.",
-    priority: "high"
-  },
-  "Woljif_Companion": {
-    feat: "Outflank",
-    why: "TWF sneak attacker who flanks constantly — +4 flanking AND crit chains with the party.",
-    priority: "high",
-    spell: "Invisibility (L2) — reliable sneak attack setup"
-  },
-  "Nenio_Companion": {
-    feat: "Greater Spell Focus (Illusion)",
-    why: "Scrollmaster is Illusion-focused. +2 total DC to Illusion spells. Or Greater Spell Penetration for better demon SR bypass.",
-    priority: "med",
-    spell: "Haste (L3) — most important party buff in the game"
-  },
-  "Stomper": {
-    feat: "Outflank",
-    why: "Stomper trips enemies as part of its attacks (BullyArchetype + FurysFall). Outflank adds crit-chain synergy.",
-    priority: "high"
-  },
-  "Ulbrig_Companion": {
-    feat: "Outflank",
-    why: "Frontline shifter with Power Attack + WeaponFocus — flanking synergy makes all his crits trigger party AoO.",
-    priority: "high"
-  },
-  "Ember_Companion": {
-    feat: "Accursed Hex (metamagic) or Extra Hex: Evil Eye",
-    why: "Ember lacks Evil Eye — taking it via the hex class feature at level 5 is more valuable than any feat. Slumber+VulnerabilityCurse+EvilEye is the full hex trifecta.",
-    priority: "high"
-  },
-};
+// FEAT_ANALYSIS and LVL_RECS are imported from services/build-guide.ts
 
 // ─── HP status ────────────────────────────────────────────────────────────────
 
@@ -174,13 +85,14 @@ function roleBar(label: string, val: number, key: string): string {
 
 function charCard(c: (typeof data.characters)[0]): string {
   const roleProfile = composition.characters.find(r => r.characterId === c.uniqueId);
-  const rec = LVL5_RECS[c.name];
+  const rec = LVL_RECS[c.name];
   const status = c.stats ? hpStatus(c.stats.hp, c.stats.hpMax) : "ok";
   const statusColor = STATUS_COLORS[status];
   const cls = c.class ? humanClass(c.class.className) : "?";
   const archetype = c.class?.archetypeName ? humanClass(c.class.archetypeName) : null;
   const isPC = c.isPlayerCharacter;
-  const weaponMismatch = c.name === "Kaede" && c.equipment?.some(e => e.slot === "Main Hand" && e.itemType === "Weapon") && !c.equipment?.some(e => e.slot === "Off Hand");
+  const hasTWFFeats = (c.feats ?? []).some(f => f.name === "Two Weapon Fighting");
+  const weaponMismatch = hasTWFFeats && c.equipment?.some(e => e.slot === "Main Hand" && e.itemType === "Weapon") && !c.equipment?.some(e => e.slot === "Off Hand");
 
   const statBlock = c.stats ? `
     <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin-bottom:10px;">
@@ -229,7 +141,7 @@ function charCard(c: (typeof data.characters)[0]): string {
       <div style="font-size:.6rem;color:#4b5280;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px;">Equipment</div>
       ${(c.equipment ?? []).map(e => {
         const slotColor = e.slot==="Main Hand"?"#ce6f8f":e.slot==="Off Hand"?"#e39400":e.slot==="Armor"?"#42b3c2":"#4b5280";
-        const warn = (c.name==="Kaede" && e.slot==="Main Hand" && e.itemType==="Weapon") ? " ⚠" : "";
+        const warn = (hasTWFFeats && e.slot==="Main Hand" && e.itemType==="Weapon" && !c.equipment?.some(ee=>ee.slot==="Off Hand")) ? " ⚠" : "";
         return `<div style="display:flex;gap:6px;font-size:.72rem;margin-bottom:2px;">
           <span style="color:${slotColor};width:56px;flex-shrink:0;font-size:.62rem;">${e.slot}</span>
           <span style="color:#8a93c0;">${humanItem(e.name)}${warn}</span>
@@ -259,9 +171,10 @@ function charCard(c: (typeof data.characters)[0]): string {
       ${roleBar("Utility",roleProfile.scores.utility,"utility")}
     </div>` : "";
 
+  const nextLevel = (c.class?.level ?? 5) + 1;
   const recHtml = rec ? `
     <div style="background:rgba(179,161,230,.06);border:1px solid rgba(179,161,230,.2);border-left:3px solid #b3a1e6;border-radius:5px;padding:8px 10px;">
-      <div style="font-size:.65rem;color:#4b5280;text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px;">Level 5 →</div>
+      <div style="font-size:.65rem;color:#4b5280;text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px;">Level ${nextLevel} →</div>
       <div style="font-size:.82rem;font-weight:700;color:#b3a1e6;margin-bottom:2px;">${rec.feat}</div>
       <div style="font-size:.72rem;color:#8a93c0;">${rec.why}</div>
       ${rec.spell ? `<div style="font-size:.7rem;color:#42b3c2;margin-top:3px;">📖 ${rec.spell}</div>` : ""}
@@ -269,7 +182,7 @@ function charCard(c: (typeof data.characters)[0]): string {
 
   const warnHtml = weaponMismatch ? `
     <div style="background:rgba(227,148,0,.08);border:1px solid rgba(227,148,0,.3);border-radius:4px;padding:6px 8px;margin-bottom:8px;font-size:.72rem;color:#e39400;">
-      ⚠ TWF feats require two one-handed weapons — switch from Finnean Greatsword!
+      ⚠ TWF feats active but no off-hand weapon equipped!
     </div>` : "";
 
   const hp = c.stats?.hp ?? 0;
@@ -333,23 +246,23 @@ const bannerItems = data.characters
 // ─── Party synergy ────────────────────────────────────────────────────────────
 
 const synergies = [
-  { icon: "🎯", title: "Outflank Chain (recommended for all frontline)", body: "None yet have Outflank. Take it at Lv5 on Kaede, Seelah, Woljif, Ulbrig, Stomper — every crit triggers a free AoO from all allies with Outflank." },
-  { icon: "😴", title: "Ember Slumber → melee pile-on", body: "Ember Slumber hex knocks enemies asleep (no save if not in combat). Sleeping = flat-footed = sneak attack from Woljif. Melee finishers Coup de Grace to kill instantly." },
-  { icon: "💉", title: "Healing coverage", body: "Seelah (lay on hands + channel 2d6), Camellia (Cure Light Wounds), Ember (Healing hex). Camellia has 2 L1 slots left. Ember's hex has no limit. Use Ember's healing hex between fights to save spell slots." },
-  { icon: "🏹", title: "Dual ranged (Lann + Wenduag)", body: "Both are dedicated archers. Lann is Zen Archer (WIS-based, Ki pool). Wenduag is Fighter (feat-heavy). They work best behind frontline melee. PointBlankMaster on Lann means no AoO when threatened." },
-  { icon: "⚡", title: "Woljif sneak attack setup", body: "Woljif needs flanking or flat-footed for 2d6 sneak attack. Use Ember's Slumber or Kaede/Seelah flanking to enable it. He dual-wields masterwork daggers — already correctly set up." },
+  { icon: "🎯", title: "Outflank Chain — Kaede only (Sly needs INT 3)", body: "Kaede has Outflank. Sly has Weapon Focus but not yet Outflank (blocked by INT 2 — needs INT 3 to qualify). Still needed: Seelah, Woljif, Ulbrig, Sly. Sly fix: Headband of Vast Intellect +2 during level-up screen to take Outflank, then swap back." },
+  { icon: "😵", title: "Cornugon Smash + Shatter Defenses — fully online", body: "Every Kaede Power Attack auto-Shakes the target for free (Cornugon Smash). Shaken targets hit by Kaede become flat-footed (Shatter Defenses). The full debuff chain runs automatically on single targets with no setup turn required." },
+  { icon: "😴", title: "Ember Slumber → melee pile-on", body: "Ember Slumber hex: Will save or sleep (auto if not in combat). Sleeping = flat-footed = Woljif sneak attacks + Kaede Shatter Defenses + Coup de Grace. Highest-value control in the party. Vulnerability Curse follows for bonus damage." },
+  { icon: "💉", title: "Deep healing bench — 4 sources, one now swift", body: "Seelah (Lay on Hands swift + channel), Daeran (Combat Healer swift channel + Cure spells), Sosiel (Cleric channel + Cure), Camellia (Cure spells). Daeran's new Combat Healer revelation makes mid-combat triage nearly free — heals without spending a standard action." },
+  { icon: "🎹", title: "Dual ranged — Lann at peak, Wenduag far behind", body: "Lann is fully online with Clustered Shots at Lv 7 — all arrows count together for DR bypass, critical vs Act 2+ DR/cold iron enemies. Wenduag is still Lv 2. She must be in every fight." },
+  { icon: "⚡", title: "Woljif sneak attack — one swap from full power", body: "Finesse Training Dagger adds DEX to damage ONLY with daggers. Sickle of Falter in main hand wastes this entirely. Swap the Sickle to any dagger — no level-up required. Both attacks then apply full DEX-to-damage. Sources of flat-footed: Ember Slumber, Kaede Cornugon+Shatter, or flanking." },
 ];
 
 // ─── Build page issues ────────────────────────────────────────────────────────
 
 const issues = [
-  { sev: "crit", char: "Kaede", msg: "Main Hand: Finnean Greatsword (TWF). Equip two one-handed weapons to activate TWF feats." },
-  { sev: "crit", char: "Seelah", msg: "HP: −11 (dying). Needs immediate healing before any action." },
-  { sev: "crit", char: "Stomper", msg: "HP: −2 (dying). Will revive after rest." },
-  { sev: "warn", char: "Camellia", msg: "HP: 5/23. Only 2 L1 spell slots remaining — rest soon." },
-  { sev: "warn", char: "Kaede", msg: "Headband of Charisma +2 equipped — this boosts CHA to +0 (still negative). Swap for Headband of Wisdom +2 to improve Will saves and skills." },
-  { sev: "info", char: "Nenio", msg: "Not using Haste yet (L3 spell, unlocks at Wizard 5). This is the most impactful buff — a level away." },
-  { sev: "info", char: "Ember", msg: "Lacks Evil Eye hex — take it at level 5 to complete the Slumber+Vulnerability+EvilEye trifecta." },
+  { sev: "crit",  char: "Woljif",   msg: "Sickle of Falter still in main hand. Finesse Training Dagger adds DEX to damage ONLY with daggers — the Sickle wastes it completely. Swap to any dagger in main hand RIGHT NOW. No level-up required. Immediate DPS increase on every attack." },
+  { sev: "crit",  char: "Wenduag",  msg: "Level 2 while everyone else is level 7. Five levels behind. Every fight she sits out deepens the gap. She must be active in every combat to close the XP debt." },
+  { sev: "warn",  char: "Sosiel",   msg: "Wearing Standard Scalemail and using a Standard Glaive at Level 7. Starting-tier gear on your best buffer. Upgrade his armor to +2 medium/heavy (he has Heavy Armor Proficiency) and give him a +1 or better polearm. He needs to survive to cast Prayer and Divine Favor." },
+  { sev: "warn",  char: "Sly",      msg: "Level 7 level-up pending in the Animal Companion screen. Apply it now: choose STR +2 (12 → 14). For Outflank: needs INT 3 (currently INT 2) — equip a Headband of Vast Intellect +2 during the level-up screen to qualify, take the feat, then swap it back." },
+  { sev: "info",  char: "Ember",    msg: "One level behind the party (Lv 6). Will catch up on the next area level-up. No action needed." },
+  { sev: "info",  char: "Note",     msg: "Companion feats (Outflank, Dazzling Display, Evil Eye, etc.) require disabling autoleveling entirely. Equipment swaps, hex usage, and spell choices can all be changed without touching autoleveling." },
 ];
 
 const issueHtml = issues.map(i => {
@@ -429,7 +342,7 @@ const html = `<!DOCTYPE html>
 
 <!-- ─── Characters ──────── -->
 <section>
-  <h2>Character Profiles — Level 4 with Level 5 Recommendations</h2>
+  <h2>Character Profiles — Level 7 (Act 2) with Next Level Recommendations</h2>
   <div class="party-grid">
     ${data.characters.map(charCard).join("")}
   </div>

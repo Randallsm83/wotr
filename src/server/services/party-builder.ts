@@ -92,8 +92,13 @@ function adjustScores(base: RoleScores, char: CharacterData, buildProfile?: Buil
   if (hasSpellKeyword(char, "fireball")
     || hasSpellKeyword(char, "lightningbolt")) s.damage  = clamp(s.damage + 1);
 
-  // ── Equipment ─────────────────────────────────────────────────────────────
-  if (hasEquipWeapon(char))                    s.damage  = clamp(s.damage + 1);
+  // ── Equipment ─────────────────────────────────────────────────────────────────────────────────
+  // Only boost damage from weapon for martial classes — casters use crossbows as backup,
+  // not as their primary damage source; boosting their damage score from a crossbow
+  // causes misclassification (e.g. Witch → "Damage").
+  const cn = (char.class?.className ?? "").toLowerCase();
+  const isCasterClass = /witch|wizard|sorcerer|oracle|shaman|druid|cleric|bard|arcanist/.test(cn);
+  if (hasEquipWeapon(char) && !isCasterClass) s.damage  = clamp(s.damage + 1);
   const hasArmor = (char.equipment ?? []).some((e) => e.slot === "Armor");
   if (hasArmor)                                s.frontline = clamp(s.frontline + 1);
 

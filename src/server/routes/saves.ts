@@ -4,9 +4,10 @@ import { analyzeParty } from "../services/party-analyzer.ts";
 import { analyzeComposition } from "../services/party-builder.ts";
 import { isIndexed, getStats, searchBlueprintsByName, lookupBlueprintsMany } from "../services/blueprint-db.ts";
 import { createSseResponse } from "../services/file-watcher.ts";
-import { readBbConfig, addBbBuff, groupLabel } from "../services/bubble-buffs.ts";
+import { readBbConfig, addBbBuff, detectBuffMod, regroupBuffs } from "../services/bubble-buffs.ts";
 import { getBuilds, getBuild, upsertBuild } from "../services/build-store.ts";
 import { adviseBuild } from "../services/build-advisor.ts";
+import { getBuildGuide } from "../services/build-guide.ts";
 import type { BuildProfile } from "../models/types.ts";
 
 const app = new Hono();
@@ -81,11 +82,13 @@ app.get("/bubbles", async (c) => {
     if (!headerEntry) return null;
     const header = JSON.parse(new TextDecoder().decode(headerEntry[1]));
     const gameId: string = header.GameId ?? "";
-    return gameId ? await readBbConfig(gameId) : null;
+    return gameId ? await readBbConfig(gameId, party.meta.mods) : null;
   })();
 
+  const activeMod = detectBuffMod(party.meta.mods);
+
   if (!bbConfig) {
-    return c.json({ configured: false, message: "BubbleBuffs config not found for this game" });
+    return c.json({ configured: false, message: `Buff mod config not found (looking for ${activeMod})` });
   }
 
   // Pre-combat buff spell keywords — things that belong in BubbleBuffs
@@ -109,21 +112,32 @@ app.get("/bubbles", async (c) => {
     removefear: 25, freedom: 20, aid: 15,
   };
 
-  // BubbleBuffs group: 1=Short (rounds), 2=Important (always-on), 3=Normal (situational)
-  const BB_GROUP: Record<string, 1|2|3> = {
-    // Short — apply right before combat
-    haste: 1, prayer: 1,
-    // Important — always cast, every encounter
-    bless: 2, protection: 2, communal: 2, guidance: 2, resistance: 2, virtue: 2,
-    unbreakableheart: 2, aid: 2, divinefavor: 2,
-    // Normal — situational / nice to have
-    goodhope: 3, heroism: 3, magicweapon: 3, magearmor: 3, divinepower: 3,
-    blur: 3, mirrorimage: 3, displacement: 3, stoneskin: 3, barkskin: 3,
-    bull: 3, bear: 3, cat: 3, eagle: 3, fox: 3, owl: 3,
-    removefear: 3, freedom: 3,
+  // Group suggestions for missing buffs — adapted per active mod
+  // B2TL groups: Quick / Important / Long
+  // BubbleBuffs:  Short  / Normal   / Long
+  const isB2TL = activeMod === "BuffIt2TheLimit";
+  const G_QUICK     = isB2TL ? "Quick"     : "Short";
+  const G_IMPORTANT = isB2TL ? "Important" : "Normal";
+  const G_LONG      = isB2TL ? "Long"      : "Long";
+
+  const BB_GROUP: Record<string, string> = {
+    haste: G_QUICK, prayer: G_QUICK,
+    bless: G_IMPORTANT, protection: G_IMPORTANT, communal: G_IMPORTANT,
+    guidance: G_IMPORTANT, resistance: G_IMPORTANT, virtue: G_IMPORTANT,
+    unbreakableheart: G_IMPORTANT, aid: G_IMPORTANT, divinefavor: G_IMPORTANT, magicfang: G_IMPORTANT,
+    goodhope: G_LONG, heroism: G_LONG, magicweapon: G_LONG, magearmor: G_LONG, divinepower: G_LONG,
+    blur: G_LONG, mirrorimage: G_LONG, displacement: G_LONG, stoneskin: G_LONG, barkskin: G_LONG,
+    bull: G_LONG, bear: G_LONG, cat: G_LONG, eagle: G_LONG, fox: G_LONG, owl: G_LONG,
+    removefear: G_LONG, freedom: G_LONG,
   };
 
-  // Who to target in BubbleBuffs
+  const GROUP_TIP_MAP: Record<string, string> = {
+    [G_QUICK]:     "rounds/level — cast right before each fight",
+    [G_IMPORTANT]: "standard prebuff — cast before every encounter",
+    [G_LONG]:      "situational — cast as needed",
+  };
+
+  // Who to target in BubbleBuffs / B2TL
   type Target = "All" | "Frontline" | "Caster" | "Strongest melee";
   const BB_TARGET: Record<string, Target> = {
     bless: "All", haste: "All", prayer: "All", goodhope: "All", heroism: "All",
@@ -136,20 +150,12 @@ app.get("/bubbles", async (c) => {
     unbreakableheart: "All", removefear: "All", freedom: "Frontline",
   };
 
-  // BubbleBuffs groups: 1=Short, 2=Important (always-cast), 3=Normal (nice-to-have)
-  const GROUP_LABEL: Record<1|2|3, string> = { 1: "Short", 2: "Important", 3: "Normal" };
-  const GROUP_TIP: Record<1|2|3, string> = {
-    1: "rounds/level — Short group, apply immediately before combat",
-    2: "always-cast buff — Important group (same as your cantrips)",
-    3: "1+ min/level, situational — Normal group",
-  };
-
-  function bbGroup(name: string): 1|2|3 {
+  function bbGroup(name: string): string {
     const n = name.toLowerCase().replace(/[^a-z]/g, "");
     for (const [k, v] of Object.entries(BB_GROUP)) {
       if (n.includes(k)) return v;
     }
-    return 2;
+    return G_IMPORTANT;
   }
   function bbTarget(name: string): Target {
     const n = name.toLowerCase().replace(/[^a-z]/g, "");
@@ -254,9 +260,9 @@ app.get("/bubbles", async (c) => {
         level:       s.spellLevel,
         priority:    priority(s.name),
         isCantrip:   s.isCantrip,
-        group:       grp,
-        groupLabel:  GROUP_LABEL[grp],
-        groupTip:    GROUP_TIP[grp],
+        group:       0,            // legacy; frontend uses groupLabel
+        groupLabel:  grp,
+        groupTip:    GROUP_TIP_MAP[grp] ?? "",
         target:      bbTarget(s.name),
         caster:      spellToCaster[s.blueprintId]     ?? "Unknown",
         casterId:    spellToCasterId[s.blueprintId]   ?? "",
@@ -288,7 +294,7 @@ app.get("/bubbles", async (c) => {
     allowInCombat: bbConfig.allowInCombat,
     buffs: bbConfig.buffs.map((b) => ({
       ...b,
-      groupLabel: groupLabel(b.inGroup),
+      groupLabel: b.groupName,  // group name read directly from config
       casterNames: b.casterIds.map((id) => idToName[id] ?? cleanName(id)),
       wantedNames: b.wanted.map((id) => idToName[id] ?? cleanName(id)),
       advice: existingAdvice[b.spellGuid] ?? "",
@@ -349,6 +355,14 @@ app.get("/builds/:characterId/advice", async (c) => {
   return c.json(advice);
 });
 
+/** GET /api/build-guide — curated issues, synergies, per-character recommendations */
+app.get("/build-guide", async (c) => {
+  const savePath = c.req.query("save");
+  const data = await parseSave(savePath);
+  if (!data) return c.json({ error: "No save found or parse failed" }, 404);
+  return c.json(getBuildGuide(data));
+});
+
 /** GET /api/party-builder — role composition analysis */
 app.get("/party-builder", async (c) => {
   const savePath = c.req.query("save");
@@ -359,9 +373,62 @@ app.get("/party-builder", async (c) => {
   return c.json(composition);
 });
 
-/** POST /api/bubbles/add — write a new buff entry to the BubbleBuffs config */
+/** POST /api/bubbles/regroup — reclassify all existing B2TL buffs into correct Quick/Important/Long groups */
+app.post("/bubbles/regroup", async (c) => {
+  const savePath  = c.req.query("save");
+  const partyData = await parseSave(savePath);
+  if (!partyData) return c.json({ error: "No save found" }, 404);
+
+  const saves  = listSaves();
+  const target = savePath ?? saves[0]?.path;
+  if (!target) return c.json({ error: "No save found" }, 404);
+
+  const { unzipSync } = await import("fflate");
+  const fs = await import("fs");
+  const zipData = fs.readFileSync(target);
+  const files   = unzipSync(zipData);
+  const headerEntry = Object.entries(files).find(([k]) => {
+    const base = k.split(/[\/\\]/).pop() ?? k;
+    return base === "header.json";
+  });
+  if (!headerEntry) return c.json({ error: "header.json not found in save" }, 500);
+  const header = JSON.parse(new TextDecoder().decode(headerEntry[1]));
+  const gameId: string = header.GameId ?? "";
+  if (!gameId) return c.json({ error: "GameId missing from save header" }, 500);
+
+  // Same heuristic used for missing-buff suggestions
+  const isB2TL = true;
+  const G_QUICK     = "Quick";
+  const G_IMPORTANT = "Important";
+  const G_LONG      = "Long";
+
+  const BB_GROUP: Record<string, string> = {
+    haste: G_QUICK, prayer: G_QUICK,
+    bless: G_IMPORTANT, protection: G_IMPORTANT, communal: G_IMPORTANT,
+    guidance: G_IMPORTANT, resistance: G_IMPORTANT, virtue: G_IMPORTANT,
+    unbreakableheart: G_IMPORTANT, aid: G_IMPORTANT, divinefavor: G_IMPORTANT, magicfang: G_IMPORTANT,
+    goodhope: G_LONG, heroism: G_LONG, magicweapon: G_LONG, magearmor: G_LONG, divinepower: G_LONG,
+    blur: G_LONG, mirrorimage: G_LONG, displacement: G_LONG, stoneskin: G_LONG, barkskin: G_LONG,
+    bull: G_LONG, bear: G_LONG, cat: G_LONG, eagle: G_LONG, fox: G_LONG, owl: G_LONG,
+    removefear: G_LONG, freedom: G_LONG, longstrider: G_LONG, feather: G_LONG,
+  };
+
+  function heuristic(clean: string): string {
+    for (const [k, v] of Object.entries(BB_GROUP)) {
+      if (clean.includes(k)) return v;
+    }
+    return G_IMPORTANT; // default: Important
+  }
+
+  const groupMap: Record<string, number> = { Normal: 0, Quick: 1, Important: 2, Long: 3 };
+
+  const result = regroupBuffs(gameId, partyData.meta.mods, groupMap, heuristic);
+  return c.json(result);
+});
+
+/** POST /api/bubbles/add — write a new buff entry to the active buff mod config */
 app.post("/bubbles/add", async (c) => {
-  let body: { spellGuid: string; inGroup: number; wantedIds: string[]; casterId: string; spellbookId: string };
+  let body: { spellGuid: string; groupName?: string; wantedIds: string[]; casterId: string; spellbookId: string };
   try {
     body = await c.req.json();
   } catch {
@@ -369,8 +436,10 @@ app.post("/bubbles/add", async (c) => {
   }
   if (!body.spellGuid) return c.json({ error: "spellGuid required" }, 400);
 
-  // Derive gameId from the current save
   const savePath = c.req.query("save");
+  const partyData = await parseSave(savePath);
+  if (!partyData) return c.json({ error: "No save found" }, 404);
+
   const saves = listSaves();
   const target = savePath ?? saves[0]?.path;
   if (!target) return c.json({ error: "No save found" }, 404);
@@ -388,12 +457,14 @@ app.post("/bubbles/add", async (c) => {
   const gameId: string = header.GameId ?? "";
   if (!gameId) return c.json({ error: "GameId not found in save" }, 500);
 
+  const mod = detectBuffMod(partyData.meta.mods);
   const result = addBbBuff(gameId, {
-    spellGuid:   body.spellGuid,
-    inGroup:     body.inGroup ?? 2,
-    wantedIds:   body.wantedIds ?? [],
-    casterId:    body.casterId ?? "",
+    spellGuid:  body.spellGuid,
+    groupName:  body.groupName ?? (mod === "BuffIt2TheLimit" ? "Important" : "Normal"),
+    wantedIds:  body.wantedIds ?? [],
+    casterId:   body.casterId ?? "",
     spellbookId: body.spellbookId ?? "",
+    mod,
   });
   if (!result.ok) return c.json({ error: result.error }, 500);
   return c.json({ ok: true });
