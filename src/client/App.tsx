@@ -1,24 +1,22 @@
 import { useState, useEffect } from "react";
 import Dashboard from "./pages/Dashboard.tsx";
 import SpellPlanner from "./pages/SpellPlanner.tsx";
-import PartyAnalysis from "./pages/PartyAnalysis.tsx";
 import BubbleBuffsPage from "./pages/BubbleBuffs.tsx";
 import Characters from "./pages/Characters.tsx";
 import Chat from "./pages/Chat.tsx";
 import BuildPlanner from "./pages/BuildPlanner.tsx";
-import PartyBuilder from "./pages/PartyBuilder.tsx";
+import FieldGuide from "./pages/FieldGuide.tsx";
 import { useLiveSave } from "./hooks/useLiveSave.ts";
 
-type Page = "dashboard" | "characters" | "spells" | "analysis" | "bubbles" | "builds" | "party" | "chat";
+type Page = "dashboard" | "characters" | "spells" | "guide" | "bubbles" | "builds" | "chat";
 
 const NAV: { id: Page; label: string; icon: string }[] = [
   { id: "dashboard",  label: "Dashboard",      icon: "⚔" },
   { id: "characters", label: "Characters",      icon: "▦" },
   { id: "spells",     label: "Spell Planner",   icon: "✦" },
-  { id: "analysis",   label: "Analysis",         icon: "⊞" },
+  { id: "guide",      label: "Field Guide",     icon: "⊞" },
   { id: "bubbles",    label: "BubbleBuffs",     icon: "◎" },
   { id: "builds",     label: "Build Planner",   icon: "◉" },
-  { id: "party",      label: "Party Builder",   icon: "⌸" },
   { id: "chat",       label: "AI Advisor",      icon: "◈" },
 ];
 
@@ -63,10 +61,9 @@ export default function App() {
         {page === "dashboard"  && <Dashboard />}
         {page === "characters" && <Characters />}
         {page === "spells"    && <SpellPlanner />}
-        {page === "analysis"  && <PartyAnalysis />}
+        {page === "guide"     && <FieldGuide />}
         {page === "bubbles"   && <BubbleBuffsPage />}
         {page === "builds"    && <BuildPlanner />}
-        {page === "party"     && <PartyBuilder />}
         {page === "chat"      && <Chat />}
       </main>
     </div>
