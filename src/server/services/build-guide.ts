@@ -963,11 +963,17 @@ function maxRoleScores(chars: { scores: RoleScores }[]): RoleScores {
   return out;
 }
 
+function isAnimalCompanion(char: CharacterData): boolean {
+  return /^AnimalCompanion|^Companion.*Unit/i.test(char.blueprint ?? "") ||
+    /AnimalCompanion/i.test(char.class?.classId ?? "") ||
+    /AnimalCompanion/i.test(char.class?.className ?? "");
+}
+
 function buildPartyAdvice(party: PartyData): PartyAdvice {
   const composition = analyzeComposition(party, getBuilds());
   const byId = new Map(composition.characters.map((c) => [c.characterId, c]));
-  const activeChars = party.characters.filter((c) => c.inParty);
-  const campChars = party.characters.filter((c) => !c.inParty);
+  const activeChars = party.characters.filter((c) => c.inParty && !isAnimalCompanion(c));
+  const campChars = party.characters.filter((c) => !c.inParty && !isAnimalCompanion(c));
   const activeProfiles = composition.characters.filter((c) => activeChars.some((p) => p.uniqueId === c.characterId));
   const activeScores = maxRoleScores(activeProfiles);
   const gaps = (Object.entries(activeScores) as [keyof RoleScores, number][]).filter(([, v]) => v < 3).map(([k]) => k);
