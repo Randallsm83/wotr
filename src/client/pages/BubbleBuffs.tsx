@@ -43,21 +43,49 @@ interface BbData {
 }
 
 const GROUP_COLOR: Record<string, string> = {
-  Short:  "text-yellow",
-  Normal: "text-blue",
-  Long:   "text-green",
+  // B2TL groups
+  Quick:     "text-yellow",
+  Important: "text-purple",
+  Long:      "text-green",
+  // BubbleBuffs legacy groups
+  Short:     "text-yellow",
+  Normal:    "text-cyan",
 };
 
 export default function BubbleBuffs() {
-  const [data, setData] = useState<BbData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData]         = useState<BbData | null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [regrouping, setRegrouping] = useState(false);
+  const [regroupResult, setRegroupResult] = useState<string | null>(null);
 
-  useEffect(() => {
+  function loadData() {
+    setLoading(true);
     fetch("/api/bubbles")
       .then((r) => r.json())
       .then(setData)
       .finally(() => setLoading(false));
-  }, []);
+  }
+
+  useEffect(() => { loadData(); }, []);
+
+  async function fixGroups() {
+    setRegrouping(true);
+    setRegroupResult(null);
+    try {
+      const res = await fetch("/api/bubbles/regroup", { method: "POST" });
+      const data = await res.json();
+      if (data.ok) {
+        setRegroupResult(`✓ Fixed ${data.updated} buffs (${data.skipped} already correct)`);
+        loadData();
+      } else {
+        setRegroupResult(`✗ ${data.error}`);
+      }
+    } catch (e: any) {
+      setRegroupResult(`✗ ${e.message}`);
+    } finally {
+      setRegrouping(false);
+    }
+  }
 
   if (loading) return <div className="text-text-dim text-sm animate-pulse">Loading BubbleBuffs config...</div>;
 
@@ -81,6 +109,9 @@ export default function BubbleBuffs() {
     (acc[g] ??= []).push(b);
     return acc;
   }, {});
+
+  const normalCount = byGroup["Normal"]?.length ?? 0;
+  const hasGroupIssue = normalCount > 5; // most buffs in the default "Normal" group
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -113,14 +144,15 @@ export default function BubbleBuffs() {
         <AiStream
           label="✦ Get AI Buff Guide"
           prompt={[
-            "Give me a prioritised BubbleBuffs setup guide for my current party.",
+            "Give me a prioritised Buff It 2 The Limit (B2TL) setup guide for my current party.",
+            "B2TL has 3 groups: Quick (cast every fight — haste, prayer), Important (standard prebuffs — bless, protection), Long (situational/long-duration — heroism, stoneskin, barkskin).",
             active.length > 0
-              ? `Already configured (${active.length}): ${active.slice(0, 10).map((b) => b.spellName).join(", ")}.`
+              ? `Currently configured (${active.length} buffs, most in the default Normal group): ${active.slice(0, 10).map((b) => b.spellName).join(", ")}.`
               : "Nothing configured yet.",
             missing.length > 0
-              ? `Missing from BubbleBuffs (${missing.length}): ${missing.slice(0, 12).map((b) => b.name).join(", ")}.`
+              ? `Not yet in B2TL (${missing.length}): ${missing.slice(0, 12).map((b) => b.name).join(", ")}.`
               : "",
-            "For each missing buff: which group (Short/Important/Normal) should it go in, who should cast it, and who should receive it? Also flag any currently configured buffs that are in the wrong group or redundant.",
+            "For each configured and missing buff: which B2TL group (Quick/Important/Long) should it go in, who should cast it, and who should receive it?",
           ].filter(Boolean).join(" ")}
         />
       </div>
@@ -135,7 +167,8 @@ export default function BubbleBuffs() {
           "Caster": "text-purple", "Strongest melee": "text-pink",
         };
         const GROUP_COLOR: Record<string, string> = {
-          Short: "text-yellow", Normal: "text-blue", Long: "text-green",
+          Quick: "text-yellow", Short: "text-yellow",
+          Important: "text-purple", Normal: "text-cyan", Long: "text-green",
         };
 
         function BuffRow({ s }: { s: MissingBuff }) {
@@ -149,7 +182,7 @@ export default function BubbleBuffs() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   spellGuid:   s.guid,
-                  inGroup:     s.group,
+                  groupName:   s.groupLabel,  // pass the group name string directly
                   wantedIds:   s.wantedIds,
                   casterId:    s.casterId,
                   spellbookId: s.spellbookId,
@@ -229,21 +262,57 @@ export default function BubbleBuffs() {
         );
       })()}
 
-      {missing.length === 0 && active.length > 0 && (
-        <div className="card border-green/30">
-          <div className="text-green text-sm font-semibold">✓ All available buffs are configured</div>
-          <div className="text-text-dim text-xs mt-1">Every buff your casters can cast is already in BubbleBuffs.</div>
+      {hasGroupIssue && (
+        <div className="card border-orange/40 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-orange text-sm font-semibold">⚠ {normalCount} buffs are in the default Normal group</div>
+            <button
+              onClick={fixGroups}
+              disabled={regrouping}
+              className="shrink-0 text-xs px-3 py-1.5 rounded border border-orange/40 text-orange hover:bg-orange/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {regrouping ? "Fixing..." : "★ Fix Groups"}
+            </button>
+          </div>
+          <div className="text-text-muted text-xs leading-relaxed">
+            B2TL has three cast buttons — <span className="text-yellow font-semibold">Quick</span> (every fight: haste, prayer),
+            {" "}<span className="text-purple font-semibold">Important</span> (standard prebuffs: bless, protection),
+            {" "}<span className="text-green font-semibold">Long</span> (situational: heroism, stoneskin, barkskin).
+            Click <strong>Fix Groups</strong> to automatically reassign all {normalCount} buffs.
+          </div>
+          {regroupResult && (
+            <div className={`text-xs font-semibold ${regroupResult.startsWith("✓") ? "text-green" : "text-red"}`}>
+              {regroupResult}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Configured buffs by group */}
-      {Object.entries(byGroup).map(([groupName, buffs]) => (
+      {missing.length === 0 && active.length > 0 && !hasGroupIssue && (
+        <div className="card border-green/30">
+          <div className="text-green text-sm font-semibold">✓ All available buffs are configured</div>
+          <div className="text-text-dim text-xs mt-1">Every buff your casters can cast is already in B2TL.</div>
+        </div>
+      )}
+
+      {/* Configured buffs by group — auto-detected from config (B2TL: Quick/Important/Long; BB: Short/Normal/Long) */}
+      {["Quick","Short","Important","Normal","Long"].filter(g => byGroup[g]).map(groupName => {
+        const GROUP_DESC: Record<string, string> = {
+          Quick:     "Rounds/level — cast right before each fight",
+          Short:     "Rounds/level — cast right before each fight",
+          Important: "Must-cast prebuffs — cast before every encounter",
+          Normal:    "Standard prebuffs — cast before every encounter",
+          Long:      "Situational buffs — cast as needed",
+        };
+        const buffs = byGroup[groupName];
+        return (
         <div key={groupName} className="card space-y-2">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="section-title mb-0">
-              <span className={GROUP_COLOR[groupName] ?? "text-text-muted"}>{groupName} Duration</span>
+          <div className="space-y-0.5 mb-1">
+            <div className="flex items-center gap-2">
+              <span className={`section-title mb-0 ${GROUP_COLOR[groupName] ?? "text-text-muted"}`}>{groupName}</span>
+              <span className="text-xs text-text-dim">{buffs.length} {buffs.length === 1 ? "buff" : "buffs"}</span>
             </div>
-            <span className="text-xs text-text-dim">{buffs.length} {buffs.length === 1 ? "buff" : "buffs"}</span>
+            <div className="text-[10px] text-text-dim">{GROUP_DESC[groupName]}</div>
           </div>
           <div className="space-y-2">
             {buffs.map((b) => (
@@ -268,7 +337,8 @@ export default function BubbleBuffs() {
             ))}
           </div>
         </div>
-      ))}
+        );
+      })}
 
       {/* Blacklisted */}
       {blisted.length > 0 && (
