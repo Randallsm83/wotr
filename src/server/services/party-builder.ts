@@ -16,19 +16,19 @@ const CLASS_BASELINES: ClassBaseline[] = [
   { keywords: ["barbarian", "bloodrager"],          scores: { frontline: 4, damage: 5, healer: 0 } },
   { keywords: ["cavalier", "herald"],               scores: { frontline: 4, damage: 3, buffer: 3 } },
   { keywords: ["paladin"],                          scores: { frontline: 4, damage: 3, healer: 3, buffer: 2 } },
-  { keywords: ["ranger"],                           scores: { damage: 4, frontline: 2, utility: 4 } },
+  { keywords: ["ranger"],                           scores: { damage: 4, frontline: 2, utility: 3 } },
   { keywords: ["slayer", "hunter"],                 scores: { damage: 4, frontline: 2, utility: 3 } },
   { keywords: ["rogue", "vivisectionist"],          scores: { damage: 4, utility: 4 } },
   { keywords: ["magus", "eldritch"],                scores: { damage: 5, frontline: 2, utility: 2 } },
-  { keywords: ["cleric"],                           scores: { healer: 4, buffer: 4, control: 2, damage: 1 } },
-  { keywords: ["oracle"],                           scores: { healer: 3, buffer: 4, control: 2, utility: 2 } },
-  { keywords: ["shaman"],                           scores: { healer: 3, buffer: 3, control: 3, utility: 4 } },
-  { keywords: ["druid"],                            scores: { healer: 2, buffer: 2, control: 3, utility: 5 } },
-  { keywords: ["monk", "scaled fist"],              scores: { frontline: 4, utility: 3, damage: 2 } },
+  { keywords: ["cleric"],                           scores: { healer: 4, buffer: 4, control: 1, damage: 1 } },
+  { keywords: ["oracle"],                           scores: { healer: 3, buffer: 4, control: 1, utility: 2 } },
+  { keywords: ["shaman"],                           scores: { healer: 3, buffer: 3, control: 3, utility: 3 } },
+  { keywords: ["druid"],                            scores: { healer: 2, buffer: 2, control: 3, utility: 4 } },
+  { keywords: ["monk", "scaled fist"],              scores: { frontline: 3, utility: 2, damage: 2 } },
   { keywords: ["bard", "skald"],                    scores: { buffer: 5, utility: 3, healer: 2, control: 2 } },
   { keywords: ["inquisitor"],                       scores: { damage: 3, utility: 4, buffer: 2, frontline: 2 } },
-  { keywords: ["wizard", "sorcerer", "arcanist"],   scores: { control: 4, damage: 4, utility: 3, buffer: 2 } },
-  { keywords: ["witch"],                            scores: { control: 5, utility: 3, damage: 2, buffer: 2 } },
+  { keywords: ["wizard", "sorcerer", "arcanist"],   scores: { control: 4, damage: 3, utility: 3, buffer: 2 } },
+  { keywords: ["witch"],                            scores: { control: 5, utility: 3, damage: 1, buffer: 2 } },
   { keywords: ["alchemist"],                        scores: { damage: 3, utility: 4, healer: 2, buffer: 2 } },
   { keywords: ["summoner"],                         scores: { utility: 5, control: 2, buffer: 2 } },
   { keywords: ["kineticist"],                       scores: { damage: 5, utility: 2, frontline: 2 } },
@@ -63,48 +63,98 @@ function hasEquipWeapon(char: CharacterData): boolean {
   return (char.equipment ?? []).some((e) => e.slot === "Main Hand" && e.itemType === "Weapon");
 }
 
+function mainHandName(char: CharacterData): string {
+  return (char.equipment ?? []).find((e) => e.slot === "Main Hand")?.name?.toLowerCase() ?? "";
+}
+
+function isCasterClass(className: string): boolean {
+  return /witch|wizard|sorcerer|oracle|shaman|druid|cleric|bard|arcanist/.test(className.toLowerCase());
+}
+
+function isRangedStyle(char: CharacterData): boolean {
+  const weapon = mainHandName(char);
+  return hasFeatKeyword(char, "pointblankshot")
+    || hasFeatKeyword(char, "preciseshot")
+    || hasFeatKeyword(char, "clusteredshots")
+    || hasFeatKeyword(char, "deadlyaim")
+    || /bow|crossbow|longbow|shortbow/.test(weapon);
+}
+
+function bounded(n: number, min = 0, max = 5): number {
+  return Math.min(max, Math.max(min, n));
+}
+
+function roundScores(scores: RoleScores): RoleScores {
+  return Object.fromEntries(
+    (Object.entries(scores) as [keyof RoleScores, number][]).map(([k, v]) => [k, clamp(v)])
+  ) as unknown as RoleScores;
+}
+
+function nudgeScore(scores: RoleScores, key: keyof RoleScores, amount: number, cap = 5) {
+  scores[key] = bounded(scores[key] + amount, 0, cap);
+}
+
+function buildProfileWeight(char: CharacterData, role: BuildProfile["role"]): number {
+  const cn = char.class?.className ?? "";
+  if (role === "tank" && isRangedStyle(char)) return 0.35;
+  if (role === "melee-dps" && isCasterClass(cn)) return 0.35;
+  if ((role === "healer" || role === "divine-caster") && !/oracle|cleric|shaman|druid|paladin/.test(cn.toLowerCase())) return 0.4;
+  if (role === "arcane-caster" && !/wizard|sorcerer|arcanist|witch|magus/.test(cn.toLowerCase())) return 0.45;
+  return 0.5;
+}
+
 // ─── Scoring ──────────────────────────────────────────────────────────────────
 
 function clamp(n: number): number { return Math.min(5, Math.max(0, Math.round(n))); }
 
 function adjustScores(base: RoleScores, char: CharacterData, buildProfile?: BuildProfile): RoleScores {
   const s = { ...base };
+  const cn = (char.class?.className ?? "").toLowerCase();
+  const casterClass = isCasterClass(cn);
+  const rangedStyle = isRangedStyle(char);
 
   // ── Feat adjustments ──────────────────────────────────────────────────────
-  if (hasFeatKeyword(char, "powerattack"))     { s.damage    = clamp(s.damage + 1); s.frontline = clamp(s.frontline + 1); }
-  if (hasFeatKeyword(char, "selectivechannel"))  s.healer    = clamp(s.healer + 1);
-  if (hasFeatKeyword(char, "extrachannel"))      s.healer    = clamp(s.healer + 1);
-  if (hasFeatKeyword(char, "spellfocus"))      { s.control   = clamp(s.control + 1); s.damage = clamp(s.damage + 1); }
-  if (hasFeatKeyword(char, "augmentsummoning")) s.utility   = clamp(s.utility + 1);
-  if (hasFeatKeyword(char, "extendspell"))       s.buffer    = clamp(s.buffer + 1);
-  if (hasFeatKeyword(char, "toughness"))         s.frontline = clamp(s.frontline + 1);
-  if (hasFeatKeyword(char, "pointblankshot"))    s.damage    = clamp(s.damage + 1);
+  if (hasFeatKeyword(char, "powerattack"))     { nudgeScore(s, "damage", 0.75); nudgeScore(s, "frontline", 0.5, 4.5); }
+  if (hasFeatKeyword(char, "selectivechannel"))  nudgeScore(s, "healer", 0.75);
+  if (hasFeatKeyword(char, "extrachannel"))      nudgeScore(s, "healer", 0.75);
+  if (hasFeatKeyword(char, "spellfocus"))      { nudgeScore(s, "control", 0.75); nudgeScore(s, "damage", 0.25, 4.5); }
+  if (hasFeatKeyword(char, "augmentsummoning")) nudgeScore(s, "utility", 0.75, 4.5);
+  if (hasFeatKeyword(char, "extendspell"))       nudgeScore(s, "buffer", 0.75);
+  if (hasFeatKeyword(char, "toughness"))         nudgeScore(s, "frontline", 0.75, 4.5);
+  if (hasFeatKeyword(char, "pointblankshot"))    nudgeScore(s, "damage", 0.5, 4.5);
 
   // ── Spell adjustments ─────────────────────────────────────────────────────
-  if (hasSpellKeyword(char, "haste"))          s.buffer  = clamp(s.buffer + 1);
-  if (hasSpellKeyword(char, "bless"))          s.buffer  = clamp(s.buffer + 1);
-  if (hasSpellKeyword(char, "heal"))           s.healer  = clamp(s.healer + 1);
-  if (hasSpellKeyword(char, "masscure"))       s.healer  = clamp(s.healer + 2);
+  if (hasSpellKeyword(char, "haste"))          nudgeScore(s, "buffer", 0.75);
+  if (hasSpellKeyword(char, "bless"))          nudgeScore(s, "buffer", 0.75);
+  if (hasSpellKeyword(char, "heal"))           nudgeScore(s, "healer", 0.75, 4.5);
+  if (hasSpellKeyword(char, "masscure"))       nudgeScore(s, "healer", 1.25);
   if (hasSpellKeyword(char, "web")
     || hasSpellKeyword(char, "hold")
-    || hasSpellKeyword(char, "slow"))          s.control = clamp(s.control + 1);
-  if (hasSpellKeyword(char, "summon"))         s.utility = clamp(s.utility + 1);
+    || hasSpellKeyword(char, "slow"))          nudgeScore(s, "control", 0.75);
+  if (hasSpellKeyword(char, "summon"))         nudgeScore(s, "utility", 0.5, 4);
   if (hasSpellKeyword(char, "fireball")
-    || hasSpellKeyword(char, "lightningbolt")) s.damage  = clamp(s.damage + 1);
+    || hasSpellKeyword(char, "lightningbolt")) nudgeScore(s, "damage", 0.75, 4.5);
 
   // ── Equipment ─────────────────────────────────────────────────────────────────────────────────
   // Only boost damage from weapon for martial classes — casters use crossbows as backup,
   // not as their primary damage source; boosting their damage score from a crossbow
   // causes misclassification (e.g. Witch → "Damage").
-  const cn = (char.class?.className ?? "").toLowerCase();
-  const isCasterClass = /witch|wizard|sorcerer|oracle|shaman|druid|cleric|bard|arcanist/.test(cn);
-  if (hasEquipWeapon(char) && !isCasterClass) s.damage  = clamp(s.damage + 1);
+  if (hasEquipWeapon(char) && !casterClass) nudgeScore(s, "damage", 0.5, 4.5);
   const hasArmor = (char.equipment ?? []).some((e) => e.slot === "Armor");
-  if (hasArmor)                                s.frontline = clamp(s.frontline + 1);
+  if (hasArmor)                              nudgeScore(s, "frontline", 0.5, 4.5);
+
+  // ── Style corrections ────────────────────────────────────────────────────
+  if (rangedStyle) {
+    s.frontline = bounded(Math.min(s.frontline, 2.5));
+    s.damage = bounded(Math.max(s.damage, 3.5));
+  }
+  if (casterClass) {
+    s.frontline = bounded(Math.min(s.frontline, 2));
+  }
 
   // ── Build profile (strongest signal) ─────────────────────────────────────
   if (buildProfile) {
-    const ROLE_BOOSTS: Record<string, Partial<RoleScores>> = {
+    const ROLE_TARGETS: Record<string, Partial<RoleScores>> = {
       "tank":          { frontline: 5 },
       "melee-dps":     { damage: 5, frontline: 3 },
       "ranged-dps":    { damage: 5 },
@@ -116,15 +166,16 @@ function adjustScores(base: RoleScores, char: CharacterData, buildProfile?: Buil
       "summoner":      { utility: 5, control: 2 },
       "support":       { utility: 4, buffer: 3 },
     };
-    const boost = ROLE_BOOSTS[buildProfile.role];
-    if (boost) {
-      for (const [k, v] of Object.entries(boost) as [keyof RoleScores, number][]) {
-        s[k] = clamp(Math.max(s[k], v));
+    const targets = ROLE_TARGETS[buildProfile.role];
+    const weight = buildProfileWeight(char, buildProfile.role);
+    if (targets) {
+      for (const [k, v] of Object.entries(targets) as [keyof RoleScores, number][]) {
+        s[k] = bounded(s[k] + ((v - s[k]) * weight));
       }
     }
   }
 
-  return s;
+  return roundScores(s);
 }
 
 // ─── Role label ───────────────────────────────────────────────────────────────
@@ -151,9 +202,10 @@ function topTwoRoles(scores: RoleScores): [string, string] {
 
 function gatherNotes(char: CharacterData, scores: RoleScores, bp?: BuildProfile): string[] {
   const notes: string[] = [];
+  const className = char.class?.className ?? "";
   if (!char.spellbook && scores.healer >= 3)
     notes.push("No spellbook detected — divine healing not available");
-  if (scores.damage >= 4 && !hasEquipWeapon(char))
+  if (scores.damage >= 4 && !hasEquipWeapon(char) && !isRangedStyle(char) && !/monk/i.test(className))
     notes.push("No weapon in main-hand — equip your best weapon");
   if (bp && scores[roleKey(bp.role)] < 3)
     notes.push(`Build profile says "${bp.role}" but stats suggest otherwise`);
