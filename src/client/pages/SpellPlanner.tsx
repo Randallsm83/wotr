@@ -110,8 +110,14 @@ export default function SpellPlanner() {
     return <div className="text-text-dim text-sm animate-pulse">Loading...</div>;
   }
 
-  const casters = party?.characters.filter((c) => c.spellbook) ?? [];
+  const allCasters = party?.characters.filter((c) => c.spellbook) ?? [];
+  // Party members first, then at-camp
+  const casters = [
+    ...allCasters.filter(c => c.inParty),
+    ...allCasters.filter(c => !c.inParty),
+  ];
   const activeCaster = casters[Math.min(selectedIdx, casters.length - 1)];
+  const partyCasterCount = casters.filter(c => c.inParty).length;
 
   return (
     <div className="space-y-4 max-w-3xl">
@@ -121,28 +127,53 @@ export default function SpellPlanner() {
         <div className="card text-text-muted text-sm">No spellcasters found in current save.</div>
       )}
 
-      {/* Caster selector */}
+      {/* Caster selector — party first, then at camp */}
       {casters.length > 1 && (
-        <div className="flex gap-1 flex-wrap">
-          {casters.map((c, i) => (
-            <button
-              key={c.uniqueId}
-              onClick={() => setSelectedIdx(i)}
-              className={[
-                "text-xs px-3 py-1.5 rounded border transition-colors",
-                i === selectedIdx
-                  ? "bg-bg-elevated border-bg-border2 text-purple"
-                  : "border-bg-border text-text-muted hover:text-text-base hover:bg-bg-elevated",
-              ].join(" ")}
-            >
-              {c.name}
-              {c.class && <span className="ml-1 opacity-50">{c.class.className} {c.class.level}</span>}
-            </button>
-          ))}
+        <div className="space-y-1">
+          <div className="flex gap-1 flex-wrap">
+            {casters.map((c, i) => (
+              <>
+                {i === partyCasterCount && i > 0 && (
+                  <div key="divider" className="w-full flex items-center gap-2 mt-1 mb-0.5">
+                    <span className="text-[10px] text-text-dim">AT CAMP</span>
+                    <div className="flex-1 h-px bg-bg-border" />
+                  </div>
+                )}
+                <button
+                  key={c.uniqueId}
+                  onClick={() => setSelectedIdx(i)}
+                  className={[
+                    "text-xs px-3 py-1.5 rounded border transition-colors",
+                    i >= partyCasterCount ? "opacity-75" : "",
+                    i === selectedIdx
+                      ? "bg-bg-elevated border-bg-border2 text-purple"
+                      : "border-bg-border text-text-muted hover:text-text-base hover:bg-bg-elevated",
+                  ].join(" ")}
+                >
+                  {c.name}
+                  {c.class && <span className="ml-1 opacity-50">{c.class.className} {c.class.level}</span>}
+                </button>
+              </>
+            ))}
+          </div>
         </div>
       )}
 
       {activeCaster && <CasterCard char={activeCaster} />}
+
+      {/* Prep recommendation note */}
+      <div className="card space-y-1">
+        <div className="section-title">Prep Priorities</div>
+        <div className="text-xs text-text-muted">Before resting, make sure to prepare:</div>
+        <ul className="space-y-1 text-xs text-text-muted">
+          <li className="flex gap-2"><span className="text-orange shrink-0">●</span>Nenio: Haste (L3) — must cast every combat. Glitterdust (L2) on fliers. Displacement (L3) on Kaede for tough fights.</li>
+          <li className="flex gap-2"><span className="text-cyan shrink-0">●</span>Camellia: Barkskin (L2) ×2 minimum (Kaede + Sly). StinkingCloud (L3) and SickeningEntanglement for groups.</li>
+          <li className="flex gap-2"><span className="text-green shrink-0">●</span>Daeran: Cure Serious Wounds ×2 minimum. Prayer (L3). HoldPerson (L2) as CC when needed.</li>
+          <li className="flex gap-2"><span className="text-purple shrink-0">●</span>Sosiel: Prayer (L3) every fight. Bless (L1) + DivineFavor for frontliners. ProtectionFromEnergy (L3) before major fights.</li>
+          <li className="flex gap-2"><span className="text-text-dim shrink-0">●</span>Kaede: Lead Blades (L1) every combat. ResistEnergy Fire (L1) on herself + Sly pre-rest.</li>
+        </ul>
+        <div className="text-[10px] text-text-dim pt-1 border-t border-bg-border">These recommendations come from the curated session guide. Open Field Guide for full details.</div>
+      </div>
     </div>
   );
 }

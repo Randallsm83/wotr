@@ -29,9 +29,35 @@ function saveColor(n: number): string {
 
 // ─── Stat Block ───────────────────────────────────────────────────────────────
 
+const STAT_TOOLTIP: Record<string, string> = {
+  STR: "Strength — melee attack/damage, carry capacity",
+  DEX: "Dexterity — ranged attacks, AC, Reflex saves, finesse attacks",
+  CON: "Constitution — hit points per level, Fortitude saves",
+  INT: "Intelligence — skill points, Wizard spells, knowledge checks",
+  WIS: "Wisdom — divine spell DC/power, Will saves, Perception",
+  CHA: "Charisma — Oracle/Paladin/Sorcerer/Bard power, social skills",
+};
+
+const SKILL_TIP: Record<string, string> = {
+  "Mobility":             "Move through threatened squares without provoking AoO; +4 to avoid attacks of opportunity from movement and stand-up actions",
+  "Athletics":            "Climb walls/ropes, swim in currents, jump across gaps. High Athletics unlocks options in exploration and some encounters",
+  "Perception":           "Spot hidden enemies and traps, detect ambushes, identify invisible creatures. One of the most important skills in the game",
+  "Thievery":             "Pick locks, disable traps, steal items. Required to safely bypass many traps that would otherwise trigger on the party",
+  "Persuasion":           "Combined social skill (Diplomacy + Intimidate + Bluff). Improves NPC attitudes, gathers info, and demoralizes enemies in combat (Shaken: \u22122 attacks/saves/checks)",
+  "Stealth":              "Move without being detected; set up surprise rounds; helpful for scouting ahead",
+  "Use Magic Device":     "Activate scrolls, wands, and magic items that normally require a different class or alignment. Especially valuable for non-casters",
+  "Knowledge (Arcana)":   "Identify arcane spells, magical items, constructs, and arcane monsters. Also required to use some scrolls",
+  "Knowledge (World)":    "Identify outsiders, history, cultures, and world events. Needed for some dialogue skill checks",
+  "Lore (Nature)":        "Identify plants, animals, fey, elementals, and weather phenomena. Required for some ranger/druid interactions",
+  "Lore (Religion)":      "Identify undead, divine spells, gods, and religious rites. Helps recognize demon weaknesses and resistances",
+  "Bluff":                "Lie convincingly, feint in combat (enemy loses DEX to AC for one attack), and create diversions. Key for trickster dialogue",
+  "Diplomacy":            "Improve NPC attitudes (hostile \u2192 friendly), gather information, and resolve encounters peacefully",
+  "Intimidate":           "Demoralize enemies (Shaken condition: \u22122 attacks/saves) in combat, and browbeat NPCs in dialogue",
+};
+
 function AbilityScore({ label, score }: { label: string; score: number }) {
   return (
-    <div className="flex flex-col items-center bg-bg-elevated rounded p-2 min-w-[52px]">
+    <div title={STAT_TOOLTIP[label]} className="flex flex-col items-center bg-bg-elevated rounded p-2 min-w-[52px]">
       <div className="text-xs text-text-dim uppercase tracking-widest">{label}</div>
       <div className={`text-lg font-bold ${statColor(score)}`}>{score}</div>
       <div className="text-xs text-text-muted">{mod(score)}</div>
@@ -123,12 +149,12 @@ function CharacterSheet({ char }: { char: CharacterData }) {
           <div className="card">
             <div className="section-title">Combat</div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              <StatPill label="AC" value={s.ac} color="text-cyan" />
-              <StatPill label="BAB" value={sign(s.bab)} color="text-orange" />
-              <StatPill label="Initiative" value={sign(s.initiative)} color="text-yellow" />
-              <StatPill label="Speed" value={`${s.speed} ft`} />
-              <StatPill label="CMB" value={sign(s.cmb)} />
-              <StatPill label="CMD" value={s.cmd} />
+              <div title="Armor Class (base 10 + armor + DEX + other bonuses)"><StatPill label="AC" value={s.ac} color="text-cyan" /></div>
+              <div title="Base Attack Bonus — added to all attack rolls"><StatPill label="BAB" value={sign(s.bab)} color="text-orange" /></div>
+              <div title="Initiative — determines turn order in combat (DEX + bonuses)"><StatPill label="Initiative" value={sign(s.initiative)} color="text-yellow" /></div>
+              <div title="Movement speed per round"><StatPill label="Speed" value={`${s.speed} ft`} /></div>
+              <div title="Combat Maneuver Bonus — used to trip, grapple, disarm (BAB + STR)"><StatPill label="CMB" value={sign(s.cmb)} /></div>
+              <div title="Combat Maneuver Defense — resistance to maneuvers against you (10 + BAB + STR + DEX)"><StatPill label="CMD" value={s.cmd} /></div>
             </div>
           </div>
 
@@ -136,15 +162,15 @@ function CharacterSheet({ char }: { char: CharacterData }) {
           <div className="card">
             <div className="section-title">Saving Throws</div>
             <div className="grid grid-cols-3 gap-2">
-              <div className="flex flex-col items-center bg-bg-elevated rounded p-2">
+              <div title="Fortitude — vs poison, disease, exhaustion, death effects (CON-based)" className="flex flex-col items-center bg-bg-elevated rounded p-2">
                 <div className="text-xs text-text-dim">Fortitude</div>
                 <div className={`text-xl font-bold ${saveColor(s.fortSave)}`}>{sign(s.fortSave)}</div>
               </div>
-              <div className="flex flex-col items-center bg-bg-elevated rounded p-2">
+              <div title="Reflex — vs area effects, traps, explosions (DEX-based)" className="flex flex-col items-center bg-bg-elevated rounded p-2">
                 <div className="text-xs text-text-dim">Reflex</div>
                 <div className={`text-xl font-bold ${saveColor(s.reflexSave)}`}>{sign(s.reflexSave)}</div>
               </div>
-              <div className="flex flex-col items-center bg-bg-elevated rounded p-2">
+              <div title="Will — vs mind-affecting, enchantments, illusions, fear (WIS-based)" className="flex flex-col items-center bg-bg-elevated rounded p-2">
                 <div className="text-xs text-text-dim">Will</div>
                 <div className={`text-xl font-bold ${saveColor(s.willSave)}`}>{sign(s.willSave)}</div>
               </div>
@@ -159,7 +185,8 @@ function CharacterSheet({ char }: { char: CharacterData }) {
                 {Object.entries(s.skills)
                   .sort((a, b) => b[1] - a[1])
                   .map(([skill, val]) => (
-                    <div key={skill} className="flex justify-between py-0.5 px-2 rounded hover:bg-bg-elevated text-xs">
+                    <div key={skill} title={SKILL_TIP[skill] ?? skill}
+                      className="flex justify-between py-0.5 px-2 rounded hover:bg-bg-elevated text-xs">
                       <span className="text-text-muted">{skill}</span>
                       <span className={`font-semibold ${val >= 8 ? "text-green" : val >= 4 ? "text-cyan" : val < 0 ? "text-red" : "text-text-base"}`}>
                         {sign(val)}
@@ -251,6 +278,7 @@ function CharacterSheet({ char }: { char: CharacterData }) {
         </div>
       )}
 
+
       {/* Spellbook summary */}
       {char.spellbook && (
         <div className="card">
@@ -303,26 +331,38 @@ export default function Characters() {
     <div className="flex gap-6 max-w-4xl">
       {/* Character selector */}
       <div className="w-36 shrink-0 space-y-1">
-        <div className="section-title">Characters</div>
-        {chars.map((c, i) => (
-          <button
-            key={c.uniqueId}
-            onClick={() => setSelected(i)}
-            className={[
-              "w-full text-left px-3 py-2 rounded text-sm transition-colors",
-              i === selected
-                ? "bg-bg-elevated border border-bg-border2 text-purple"
-                : "text-text-muted hover:text-text-base hover:bg-bg-elevated",
-            ].join(" ")}
-          >
-            <div className="font-semibold truncate">{c.name}</div>
-            {c.class && (
-              <div className="text-xs text-text-dim truncate">
-                {c.class.className} {c.class.level}
-              </div>
-            )}
-          </button>
-        ))}
+        <div className="section-title">Party</div>
+        {chars.filter(c => c.inParty).map((c) => {
+          const i = chars.indexOf(c);
+          return (
+            <button key={c.uniqueId} onClick={() => setSelected(i)}
+              className={["w-full text-left px-3 py-2 rounded text-sm transition-colors",
+                i === selected ? "bg-bg-elevated border border-bg-border2 text-purple"
+                : "text-text-muted hover:text-text-base hover:bg-bg-elevated"].join(" ")}
+            >
+              <div className="font-semibold truncate">{c.name}</div>
+              {c.class && <div className="text-xs text-text-dim truncate">{c.class.className} {c.class.level}</div>}
+            </button>
+          );
+        })}
+        {chars.some(c => !c.inParty) && (
+          <>
+            <div className="section-title text-text-dim mt-3 pt-2 border-t border-bg-border">At Camp</div>
+            {chars.filter(c => !c.inParty).map((c) => {
+              const i = chars.indexOf(c);
+              return (
+                <button key={c.uniqueId} onClick={() => setSelected(i)}
+                  className={["w-full text-left px-3 py-2 rounded text-sm transition-colors opacity-80",
+                    i === selected ? "bg-bg-elevated border border-bg-border2 text-purple"
+                    : "text-text-muted hover:text-text-base hover:bg-bg-elevated"].join(" ")}
+                >
+                  <div className="font-semibold truncate">{c.name}</div>
+                  {c.class && <div className="text-xs text-text-dim truncate">{c.class.className} {c.class.level}</div>}
+                </button>
+              );
+            })}
+          </>
+        )}
       </div>
 
       {/* Sheet */}
