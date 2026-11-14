@@ -1,0 +1,122 @@
+#!/bin/zsh
+# Drive the WotR Companion (Bun + Hono API serving the built React client) for verification.
+# Usage: wotr-verify fixtures|launch|doctor|drive <feature>|stop|cleanup
+emulate -L zsh
+setopt err_exit pipe_fail no_unset
+
+SKILL_DIR=${0:A:h:h}
+REPO=${SKILL_DIR:h:h:h}
+STATE=${WOTR_VERIFY_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/verify-wotr}
+PORT=${WOTR_VERIFY_PORT:-42510}
+REMOTE=${WOTR_VERIFY_REMOTE:-hal9k-win}
+REMOTE_SAVES='C:/Users/ranmil/AppData/LocalLow/Owlcat Games/Pathfinder Wrath Of The Righteous/Saved Games'
+REMOTE_DB='C:/Users/ranmil/projects/wotr/data/blueprints.db'
+FIX=$STATE/fixtures   # cached inputs, kept across cleanup
+APP=$STATE/app        # snapshot of the checkout the server runs from
+GAME=$STATE/game      # scratch WOTR_GAME_DIR so BubbleBuffs writes never reach a real game install
+RUN=$STATE/run        # pid + server log
+HARNESS=$STATE/harness
+EVIDENCE=$STATE/evidence
+BASE=http://127.0.0.1:$PORT
+
+(( PORT >= 42500 && PORT <= 42599 )) || { print -u2 "WOTR_VERIFY_PORT must be in 42500-42599"; exit 2; }
+if ! command -v bun >/dev/null; then source ~/.config/zsh/agent-env.zsh; fi
+
+die() { print -u2 "wotr-verify: $*"; exit 1; }
+pid_alive() { [[ -f $RUN/server.pid ]] && kill -0 $(<$RUN/server.pid) 2>/dev/null; }
+
+cmd_fixtures() {
+  mkdir -p $FIX/saves
+  if [[ -n ${WOTR_FIXTURE_SAVE:-} ]]; then
+    cp -f -- $WOTR_FIXTURE_SAVE $FIX/saves/
+  elif [[ -z $(print -l $FIX/saves/*.zks(N)) ]]; then
+    local name
+    name=$(ssh -o ConnectTimeout=10 $REMOTE "dir /B /O-D /A-D \"%USERPROFILE%\\AppData\\LocalLow\\Owlcat Games\\Pathfinder Wrath Of The Righteous\\Saved Games\\Manual_*.zks\"" | head -1 | tr -d '\r')
+    [[ $name == *.zks ]] || die "no Manual_*.zks save found on $REMOTE"
+    scp -q "$REMOTE:$REMOTE_SAVES/$name" $FIX/saves/   # scp (SFTP) takes the spaced path literally
+  fi
+  [[ -s $FIX/blueprints.db ]] || scp -q "$REMOTE:$REMOTE_DB" $FIX/blueprints.db
+  (cd $FIX && shasum -a 256 saves/*.zks blueprints.db) | tee $FIX/SOURCE.sha256
+}
+
+cmd_launch() {
+  pid_alive && die "instance already running (pid $(<$RUN/server.pid)); run doctor or cleanup"
+  lsof -nP -iTCP:$PORT -sTCP:LISTEN -t >/dev/null 2>&1 && die "port $PORT is owned by another process; pick WOTR_VERIFY_PORT in 42500-42599"
+  [[ -s $FIX/blueprints.db && -n $(print -l $FIX/saves/*.zks(N)) ]] || die "fixtures missing; run: wotr-verify fixtures"
+  mkdir -p $APP/data $GAME $RUN
+  # Snapshot the working tree so dist/, node_modules and data/builds.json never land in the checkout.
+  rsync -a --delete --exclude /.git --exclude /node_modules --exclude /dist --exclude /data \
+    --exclude '/.env*' --exclude /.omp --exclude '/*.html' $REPO/ $APP/
+  cp -f $FIX/blueprints.db $APP/data/blueprints.db
+  # blueprint-db.ts opens readonly then sets WAL; that needs the -wal/-shm sidecars to already exist.
+  sqlite3 $APP/data/blueprints.db '.filectrl persist_wal 1' 'select count(*) from blueprints;' >/dev/null
+  (cd $APP && bun install --frozen-lockfile >$RUN/install.log 2>&1) || die "bun install failed: $RUN/install.log"
+  (cd $APP && bunx vite build --config vite.config.ts >$RUN/build.log 2>&1) || die "vite build failed: $RUN/build.log"
+  # env -u: the paid AI Advisor stays off even when the shell exports a key; cwd has no .env for Bun to load.
+  (cd $APP && env -u ANTHROPIC_API_KEY PORT=$PORT WOTR_SAVES_DIR=$FIX/saves WOTR_GAME_DIR=$GAME \
+    nohup bun run src/server/index.ts >$RUN/server.log 2>&1 & print $! >$RUN/server.pid)
+  local i
+  for i in {1..60}; do
+    if curl -fsS $BASE/api/party -o /dev/null 2>/dev/null; then print "ready: $BASE (pid $(<$RUN/server.pid))"; return 0; fi
+    pid_alive || die "server exited; see $RUN/server.log"
+    sleep 0.5
+  done
+  die "not ready after 30s; see $RUN/server.log"
+}
+
+cmd_doctor() {
+  local ok=1 owner
+  pid_alive && print "ok   process pid $(<$RUN/server.pid)" || { print "FAIL no live server pid in $RUN"; ok=0; }
+  owner=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1 || true)
+  [[ -n $owner && -f $RUN/server.pid && $owner == $(<$RUN/server.pid) ]] && print "ok   port $PORT owned by our pid" || { print "FAIL port $PORT owner='$owner'"; ok=0; }
+  local f drift=0
+  for f in src scripts package.json bun.lock vite.config.ts tailwind.config.ts postcss.config.js tsconfig.json; do
+    diff -rq $REPO/$f $APP/$f >/dev/null 2>&1 || drift=1
+  done
+  (( ! drift )) && print "ok   snapshot matches checkout ($(git -C $REPO rev-parse --short HEAD) + worktree)" || { print "FAIL snapshot differs from checkout (cleanup + launch)"; ok=0; }
+  local st; st=$(curl -fsS $BASE/api/status 2>/dev/null || true)
+  [[ $st == *'"indexed":true'* ]] && print "ok   /api/status $st" || { print "FAIL /api/status '$st'"; ok=0; }
+  local saves; saves=$(curl -fsS $BASE/api/saves 2>/dev/null || true)
+  [[ $saves == *"$FIX/saves"* ]] && print "ok   /api/saves lists fixture dir" || { print "FAIL /api/saves '$saves'"; ok=0; }
+  local code; code=$(curl -s -o /dev/null -w '%{http_code}' $BASE/api/party || true)
+  [[ $code == 200 ]] && print "ok   /api/party 200 (save parses)" || { print "FAIL /api/party $code"; ok=0; }
+  local ai; ai=$(curl -s -X POST -H 'Content-Type: application/json' -d '{}' $BASE/api/ai/chat || true)
+  [[ $ai == *'ANTHROPIC_API_KEY not set'* ]] && print "ok   paid AI Advisor disabled" || { print "FAIL AI path answered '$ai'"; ok=0; }
+  (( ok )) && print "doctor: healthy" || { print "doctor: NOT healthy"; return 1; }
+}
+
+cmd_drive() {
+  local feature=${1:?feature: dashboard|characters|spells|builds|bubbles}
+  local out=$EVIDENCE/$(date -u +%Y%m%dT%H%M%SZ)-$feature
+  if [[ ! -d $HARNESS/node_modules/playwright-core ]]; then
+    mkdir -p $HARNESS
+    (cd $HARNESS && [[ -f package.json ]] || print '{"name":"wotr-verify-harness","private":true}' >package.json
+     bun add playwright-core@1.65.1 >/dev/null)
+  fi
+  mkdir -p $out
+  local rc=0
+  (cd $HARNESS && WOTR_VERIFY_GAME_DIR=$GAME WOTR_VERIFY_APP_DIR=$APP bun $SKILL_DIR/scripts/drive.ts $feature $BASE $out) || rc=$?
+  print "evidence: $out"
+  return $rc
+}
+
+cmd_stop() {
+  if pid_alive; then kill $(<$RUN/server.pid); sleep 0.5; pid_alive && kill -9 $(<$RUN/server.pid) || true; fi
+  rm -f $RUN/server.pid
+}
+
+cmd_cleanup() {
+  cmd_stop
+  rm -rf $APP $GAME $RUN   # fixtures/, harness/ (caches) and evidence/ survive
+  print "cleaned; evidence kept in $EVIDENCE"
+}
+
+case ${1:-} in
+  fixtures) cmd_fixtures ;;
+  launch)   cmd_launch ;;
+  doctor)   cmd_doctor ;;
+  drive)    shift; cmd_drive "$@" ;;
+  stop)     cmd_stop ;;
+  cleanup)  cmd_cleanup ;;
+  *) print -u2 "usage: wotr-verify fixtures|launch|doctor|drive <feature>|stop|cleanup"; exit 2 ;;
+esac
