@@ -1,0 +1,13 @@
+# breaks: A4
+# addBbBuff writes an empty InGroups for BuffIt2TheLimit, so the mod files the buff under no group.
+--- a/src/server/services/bubble-buffs.ts
++++ b/src/server/services/bubble-buffs.ts
+@@ -215,7 +215,7 @@
+       Key:   { Guid: formatGuid(normalizedGuid), MetamagicMask: 0, Archmage: false },
+       Value: {
+         InGroup:    inGroupNum,
+-        InGroups:   [entry.groupName],  // keep for reference/compatibility
++        InGroups:   [],
+         Blacklisted: false,
+         IgnoreForOverwriteCheck: null,
+         Wanted:     entry.wantedIds,

@@ -1,0 +1,13 @@
+# breaks: A1
+# addBbBuff treats a file it cannot parse as an empty config and overwrites it.
+--- a/src/server/services/bubble-buffs.ts
++++ b/src/server/services/bubble-buffs.ts
+@@ -190,7 +190,7 @@
+   try {
+     raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+   } catch (e: any) {
+-    return { ok: false, error: `Failed to parse config: ${e.message}` };
++    raw = {};
+   }
+ 
+   const buffs: any[] = raw.Buffs ?? [];

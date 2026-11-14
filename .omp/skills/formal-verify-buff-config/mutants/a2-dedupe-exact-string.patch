@@ -1,0 +1,13 @@
+# breaks: A2
+# addBbBuff compares GUIDs as raw strings, so the same spell spelled another way is added twice.
+--- a/src/server/services/bubble-buffs.ts
++++ b/src/server/services/bubble-buffs.ts
+@@ -198,7 +198,7 @@
+ 
+   // De-duplicate — don’t add if already present
+   const alreadyExists = buffs.some(
+-    (b: any) => normalizeGuid(b?.Key?.Guid ?? "") === normalizedGuid
++    (b: any) => (b?.Key?.Guid ?? "") === entry.spellGuid
+   );
+   if (alreadyExists) return { ok: true }; // idempotent
+ 

@@ -1,0 +1,13 @@
+# breaks: A3
+# formatGuid drops one hex digit from the last group.
+--- a/src/server/services/bubble-buffs.ts
++++ b/src/server/services/bubble-buffs.ts
+@@ -162,7 +162,7 @@
+ function formatGuid(hex: string): string {
+   const h = hex.replace(/-/g, "").toLowerCase();
+   if (h.length !== 32) return hex; // already formatted or invalid
+-  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
++  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(21)}`;
+ }
+ 
+ export interface AddBbBuffEntry {
