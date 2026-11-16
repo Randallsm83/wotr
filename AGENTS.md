@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to WARP (warp.dev) when working with code in this repository.
+Guidance for AI coding agents working in this repository.
 
 ## Project purpose
 Pathfinder: Wrath of the Righteous companion web app. Reads the game's `.zks` save files from disk, parses party/character/spellbook data, and provides:
